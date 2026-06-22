@@ -1,0 +1,177 @@
+# core/engine.py
+# NeuroSentinel Lite — Phase 3 Core Pipeline Engine
+# Integrated Multi-Brain Structural Autoencoders + Contrastive Semantic Drift Tracking
+
+import time
+import requests
+import torch
+import torch.nn as nn
+import os
+from typing import Dict, Any, Optional
+from config.settings import SystemSettings
+from core.tap import SecurityTap
+from core.checkpoint import AgentCheckpoint
+from core.quarantine import QuarantineEngine, QuarantineSignal
+from core.semantic import SemanticDriftDetector
+
+# ✅ REMOVED: from core.engine import IndustrialPipeline, THRESHOLDS, SEMANTIC_DRIFT_LIMITS
+
+# 📋 Phase 2 Calibrated Structural Threshold Register (Imported by app.py)
+THRESHOLDS = {
+    "Researcher": 0.017311,
+    "Analyst": 0.000804,
+    "Reporter": 0.002997
+}
+
+# 🔬 Phase 3 Semantic Drift Hard Boundaries (Calibrated to catch context subversion)
+SEMANTIC_DRIFT_LIMITS = {
+    "Researcher": 0.450000,
+    "Analyst": 0.480000,
+    "Reporter": 0.500000
+}
+
+MAX_VALS = torch.tensor([3200.0, 200.0, 6.0, 30.0])
+MIN_VALS = torch.tensor([0.0,   0.0,   0.0, 0.0])
+
+class AgentNode:
+    def __init__(self, role_name: str, system_prompt: str):
+        self.role_name = role_name
+        self.system_prompt = system_prompt
+
+class IndustrialPipeline:
+    def __init__(self, settings: SystemSettings = SystemSettings()):
+        self.settings = settings
+        self.tap = SecurityTap(settings=self.settings)
+        self.checkpoints = AgentCheckpoint(settings=self.settings)
+        
+        self.quarantine = QuarantineEngine(
+            threshold=THRESHOLDS["Researcher"],
+            checkpoint_manager=self.checkpoints,
+            settings=self.settings
+        )
+        
+        self.nodes: Dict[str, AgentNode] = {
+            "Researcher": AgentNode("Researcher", "Extract only critical technical parameters from raw text. Keep it highly objective."),
+            "Analyst": AgentNode("Analyst", "Examine input specifications for risks, errors, and system inefficiencies."),
+            "Reporter": AgentNode("Reporter", "Generate a strict, single-sentence executive confirmation statement from the analysis.")
+        }
+        
+        # Initialize Phase 3 Semantic Anchor System
+        self.semantic_detector = SemanticDriftDetector(settings=self.settings)
+        for role, node in self.nodes.items():
+            self.semantic_detector.register_anchor(role, node.system_prompt)
+        
+        # Load Phase 2 Autoencoder Profiles
+        from models.anomaly_detector import LSTMAutoencoder
+        self.brains = {}
+        for role in ["Researcher", "Analyst", "Reporter"]:
+            model_path = os.path.join("models", f"{role.lower()}_core.pt")
+            model = LSTMAutoencoder(sequence_length=1, feature_dim=4, hidden_dim=8)
+            if os.path.exists(model_path):
+                model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+            model.eval()
+            self.brains[role] = model
+
+    def _execute_inference(self, node: AgentNode, user_input: str) -> tuple[str, float]:
+        payload = {
+            "model": self.settings.TARGET_MODEL,
+            "prompt": f"System Guidelines: {node.system_prompt}\nContext: {user_input}",
+            "stream": False,
+            "options": {
+                "num_predict": 80,
+                "temperature": 0.1,
+                "num_thread": 4
+            }
+        }
+        start_marker = time.perf_counter()
+        response = requests.post(self.settings.OLLAMA_BASE_URL, json=payload, timeout=180)
+        end_marker = time.perf_counter()
+        
+        if response.status_code == 200:
+            return response.json().get("response", "").strip(), (end_marker - start_marker)
+        raise RuntimeError(f"Ollama integration node failed. Status code: {response.status_code}")
+
+    def _score_agent_structure(self, role: str, features: list) -> float:
+        model = self.brains.get(role)
+        if not model:
+            return 0.0
+        t = torch.tensor([[features]], dtype=torch.float32)
+        t_scaled = (t - MIN_VALS) / (MAX_VALS - MIN_VALS + 1e-5)
+        with torch.no_grad():
+            reconstructed = model(t_scaled)
+            mse = nn.MSELoss()(reconstructed, t_scaled).item()
+        return mse
+
+    def execute_session(self, session_id: str, entry_prompt: str, model=None) -> dict:
+        current_input = entry_prompt
+        pipeline_sequence = ["Researcher", "Analyst", "Reporter"]
+        agent_results = []
+        quarantine_report = None
+        
+        print(f"\n[Pipeline] Active Session Stream: {session_id}")
+        
+        for i, role in enumerate(pipeline_sequence):
+            remaining = pipeline_sequence[i+1:]
+            next_role = remaining[0] if remaining else "Client"
+            node = self.nodes[role]
+            
+            struct_threshold = THRESHOLDS.get(role, 0.015)
+            semantic_limit = SEMANTIC_DRIFT_LIMITS.get(role, 0.50)
+            
+            try:
+                output, dt = self._execute_inference(node, current_input)
+                telemetry = self.tap.extract_features(session_id, role, next_role, output, dt)
+                m = telemetry["metrics"]
+                features = [m["length"], m["word_count"], m["entropy"], m["execution_time"]]
+                
+                # Compute Dual-Verification Layer Scores
+                mse = self._score_agent_structure(role, features)
+                drift = self.semantic_detector.calculate_drift(role, output)
+                
+                print(f"  ├─ Node [{role}] -> Structure MSE: {mse:.6f} [Limit: {struct_threshold:.6f}] | Semantic Drift: {drift:.6f} [Limit: {semantic_limit:.6f}]")
+                
+                # Evaluation Logic: Check structural thresholds OR semantic drift limits
+                if mse >= struct_threshold or drift >= semantic_limit:
+                    is_semantic_breach = drift >= semantic_limit
+                    chosen_threshold = semantic_limit if is_semantic_breach else struct_threshold
+                    active_score = drift if is_semantic_breach else mse
+                    
+                    self.quarantine.threshold = chosen_threshold
+                    
+                    alert_reason = f"SEMANTIC DRIFT BREACH (+{((drift-semantic_limit)/semantic_limit)*100:.1f}%)" if is_semantic_breach else "STRUCTURAL METRIC ANOMALY"
+                    print(f"  🚨 [Anomaly Triggered via {alert_reason}] Isolation initiated on '{role}'")
+                    
+                    raise QuarantineSignal(
+                        agent_id=role, 
+                        mse=active_score, 
+                        threshold=chosen_threshold, 
+                        output=f"[{alert_reason}] {output}", 
+                        telemetry=m
+                    )
+                
+                self.checkpoints.save(agent_id=role, input_text=current_input, output_text=output, telemetry=m, mse=mse)
+                agent_results.append({
+                    "role": role, "status": "clean", "mse": mse, "drift": drift, 
+                    "output": output, "time": round(dt, 3)
+                })
+                current_input = output
+                
+            except QuarantineSignal as qs:
+                quarantine_report = self.quarantine.recover(signal=qs, pipeline_ref=self, remaining_roles=remaining)
+                agent_results.append({
+                    "role": role, "status": "quarantined", "mse": qs.mse, 
+                    "breach_pct": qs.breach_pct, "incident_id": quarantine_report["incident_id"]
+                })
+                current_input = quarantine_report["resumed_output"]
+                break
+            except Exception as e:
+                print(f"  ❌ System fault on [{role}]: {e}")
+                agent_results.append({"role": role, "status": "error", "error": str(e)})
+                break
+                
+        return {
+            "final_output": current_input,
+            "agent_results": agent_results,
+            "quarantine_report": quarantine_report,
+            "was_quarantined": quarantine_report is not None
+        }

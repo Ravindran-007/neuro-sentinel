@@ -1,0 +1,107 @@
+services:
+
+  # ── Redis ─────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: neurosentimel_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-neurosentinel_redis_2026}
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-neurosentinel_redis_2026}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - neurosentimel_net
+    restart: unless-stopped
+
+  # ── Ollama ────────────────────────────────────────────────
+  # No command override — image starts 'ollama serve' automatically
+  # Healthcheck uses 'ollama list' (built-in, no curl needed)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: neurosentimel_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - neurosentimel_net
+    restart: unless-stopped
+
+  # ── Ollama Init: pull models once then exit ───────────────
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: neurosentimel_ollama_init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "[init] Pulling phi3:mini..." &&
+        ollama pull phi3:mini &&
+        echo "[init] Pulling nomic-embed-text..." &&
+        ollama pull nomic-embed-text &&
+        echo "[init] All models ready."
+    networks:
+      - neurosentimel_net
+    restart: "no"
+
+  # ── FastAPI Security Service ──────────────────────────────
+  security_service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: neurosentimel_security_service
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-neurosentinel_redis_2026}
+      - OLLAMA_BASE_URL=http://ollama:11434/api/generate
+      - TARGET_MODEL=phi3:mini
+      - LOG_LEVEL=info
+    depends_on:
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ./models:/app/models:ro
+      - ./data:/app/data
+      - ./config:/app/config:ro
+      - ./core:/app/core:ro
+    networks:
+      - neurosentimel_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  redis_data:
+    driver: local
+  ollama_data:
+    driver: local
+
+networks:
+  neurosentimel_net:
+    driver: bridge

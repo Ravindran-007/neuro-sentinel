@@ -1,0 +1,14 @@
+data/
+__pycache__/
+*.pyc
+.env
+*.pt
+*.pth
+.pytest_cache/
+htmlcov/
+.coverage
+.DS_Store
+*.log
+*.pid
+*.pid.lock
+*.sqlite3
