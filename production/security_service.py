@@ -8,17 +8,28 @@ import os
 import json
 import logging
 import time
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 from dataclasses import dataclass, asdict
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 import redis
 import torch
 
 from config.settings import SystemSettings
 from core.engine import IndustrialPipeline, THRESHOLDS, SEMANTIC_DRIFT_LIMITS
+
+# ─────────────────────────────────────────────────────────────
+# GNN IMPORTS (Level 4)
+# ─────────────────────────────────────────────────────────────
+from core.gnn import GNNPropagationDetector
+
+# ─────────────────────────────────────────────────────────────
+# KAFKA IMPORTS (Level 4)
+# ─────────────────────────────────────────────────────────────
+from core.kafka_producer import kafka_producer
 
 # ─────────────────────────────────────────────────────────────
 # CONSTANTS
@@ -47,6 +58,22 @@ app = FastAPI(
     title="NeuroSentinel Security Service",
     description="Dual-Layer Detection: Structural Fingerprinting + Semantic Drift",
     version="2.0.0"
+)
+
+# ─────────────────────────────────────────────────────────────
+# CORS MIDDLEWARE — Allow React Dashboard to connect
+# ─────────────────────────────────────────────────────────────
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "https://neurosentinel.vercel.app",
+        "*"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ─────────────────────────────────────────────────────────────
@@ -137,6 +164,22 @@ class AnomalyEvent:
 
 
 # ─────────────────────────────────────────────────────────────
+# GNN SCHEMAS (Level 4)
+# ─────────────────────────────────────────────────────────────
+
+class AgentData(BaseModel):
+    id: str
+    role: str
+    structural_score: float = 0.0
+    semantic_drift: float = 0.0
+    confidence: float = 0.0
+
+class PropagationRequest(BaseModel):
+    agents: List[AgentData]
+    connections: List[List[str]]
+
+
+# ─────────────────────────────────────────────────────────────
 # CORE DETECTION ENGINE
 # ─────────────────────────────────────────────────────────────
 class SecurityEngine:
@@ -207,7 +250,6 @@ class SecurityEngine:
             )
 
             # ── Layer 2: Semantic Drift ───────────────────────
-            # ✅ FIXED: calculate_drift (matches core/engine.py)
             semantic_drift     = self.pipeline.semantic_detector.calculate_drift(
                 req.agent_role, agent_output
             )
@@ -274,6 +316,16 @@ class SecurityEngine:
             if redis_client:
                 await self._persist_detection(result)
 
+            # ─────────────────────────────────────────────────────────────
+            # KAFKA EVENT PRODUCTION (Level 4)
+            # ─────────────────────────────────────────────────────────────
+            try:
+                if result.overall_status != "CLEAN":
+                    kafka_producer.produce_anomaly(result.dict())
+                kafka_producer.produce_detection(result.dict())
+            except Exception as e:
+                logger.warning(f"⚠️ Kafka event failed: {e}")
+
             return result
 
         except HTTPException:
@@ -319,8 +371,19 @@ class SecurityEngine:
 engine = SecurityEngine()
 
 # ─────────────────────────────────────────────────────────────
+# GNN DETECTOR (Level 4)
+# ─────────────────────────────────────────────────────────────
+
+gnn_detector = GNNPropagationDetector(
+    model_path="models/gnn/production_model.pt"
+)
+logger.info("✅ GNN Detector initialized")
+
+
+# ─────────────────────────────────────────────────────────────
 # REST ENDPOINTS
 # ─────────────────────────────────────────────────────────────
+
 @app.post("/api/detect", response_model=DetectionResult)
 async def detect_anomaly(request: DetectionRequest):
     """
@@ -428,6 +491,43 @@ async def get_recent_anomalies(agent_role: str, limit: int = 10):
 
 
 # ─────────────────────────────────────────────────────────────
+# GNN ENDPOINTS (Level 4)
+# ─────────────────────────────────────────────────────────────
+
+@app.post("/api/propagation/detect")
+async def detect_propagation(request: PropagationRequest):
+    """Detect compromise propagation across agent network."""
+    try:
+        agents_dict = [agent.dict() for agent in request.agents]
+        result = gnn_detector.detect_propagation(agents_dict, request.connections)
+        return result
+    except Exception as e:
+        logger.error(f"Propagation detection failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/propagation/graph")
+async def get_propagation_graph():
+    """Get current agent network graph."""
+    try:
+        return gnn_detector.get_graph_data()
+    except Exception as e:
+        logger.error(f"Graph retrieval failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/propagation/status")
+async def get_propagation_status():
+    """Get GNN model and detector status."""
+    return {
+        "status": "ready",
+        "model_path": "models/gnn/production_model.pt",
+        "graph_nodes": gnn_detector.graph_builder.get_node_count(),
+        "graph_edges": gnn_detector.graph_builder.get_edge_count()
+    }
+
+
+# ─────────────────────────────────────────────────────────────
 # STARTUP / SHUTDOWN
 # ─────────────────────────────────────────────────────────────
 @app.on_event("startup")
@@ -449,6 +549,20 @@ async def shutdown_event():
         except Exception:
             pass
 
+# ─────────────────────────────────────────────────────────────
+# DEBUG: LIST ALL ROUTES ON STARTUP
+# ─────────────────────────────────────────────────────────────
+@app.on_event("startup")
+async def list_routes():
+    logger.info("📋 === REGISTERED ROUTES ===")
+    routes = []
+    for route in app.routes:
+        if hasattr(route, "path") and hasattr(route, "methods"):
+            routes.append(f"   {list(route.methods)} {route.path}")
+    for route in sorted(routes):
+        logger.info(route)
+    logger.info(f"📋 Total routes: {len(routes)}")
+    logger.info("📋 === END ROUTES ===")
 
 if __name__ == "__main__":
     import uvicorn
