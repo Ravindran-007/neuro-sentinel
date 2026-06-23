@@ -68,7 +68,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
+        "http://localhost:3001",
         "https://neurosentinel.vercel.app",
+        "https://neuro-sentinel-0nhi.onrender.com",
         "*"
     ],
     allow_credentials=True,
@@ -566,5 +568,6 @@ async def list_routes():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")#   C O R S   e n a b l e d  
- 
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+
+#   C O R S   e n a b l e d
