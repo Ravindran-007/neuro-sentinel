@@ -282,6 +282,14 @@ gnn_detector = GNNPropagationDetector(model_path="models/gnn/production_model.pt
 logger.info("🧠 Level 4 Inductive GraphSAGE Detector Initialized.")
 
 # --- REST ENDPOINTS ---
+@app.get("/")
+async def root_welcome():
+    return {
+        "status": "online",
+        "message": "Welcome to the NeuroSentinel Enterprise Security Gateway Core API.",
+        "documentation": "/docs"
+    }
+
 @app.post("/api/detect", response_model=DetectionResult)
 async def detect_anomaly(request: DetectionRequest):
     logger.info(f"Incoming inspection query -> Agent: {request.agent_role} | Text size: {len(request.user_input)}")
@@ -300,7 +308,6 @@ async def health_check():
 
 @app.get("/api/thresholds")
 async def get_thresholds():
-    # FIXED: Restructured braces to satisfy compilation mapping constraints
     return {
         "structural_thresholds": THRESHOLDS,
         "semantic_drift_limits": SEMANTIC_DRIFT_LIMITS,
