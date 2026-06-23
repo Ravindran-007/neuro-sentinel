@@ -566,4 +566,5 @@ async def list_routes():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")#   C O R S   e n a b l e d  
+ 
