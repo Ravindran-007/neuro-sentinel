@@ -1,0 +1,10 @@
+﻿node_modules/
+build/
+*.pt
+*.pth
+models/
+data/
+__pycache__/
+*.pyc
+.env
+.git/

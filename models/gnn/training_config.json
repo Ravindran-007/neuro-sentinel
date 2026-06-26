@@ -1,0 +1,11 @@
+{
+  "num_nodes": 5,
+  "train_samples": 5000,
+  "test_samples": 1000,
+  "batch_size": 32,
+  "epochs": 50,
+  "hidden_channels": 64,
+  "learning_rate": 0.001,
+  "final_accuracy": 0.7914,
+  "timestamp": "2026-06-22T14:42:01.549043"
+}

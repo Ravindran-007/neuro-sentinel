@@ -17,7 +17,6 @@ function App() {
     useEffect(() => {
         const fetchData = async () => {
             try {
-                // Absolute REST endpoint mapping vectors to bypass local webpack routing
                 const [healthRes, thresholdsRes] = await Promise.all([
                     axios.get(`${API_URL}/api/health`),
                     axios.get(`${API_URL}/api/thresholds`)
@@ -138,5 +137,4 @@ function App() {
     );
 }
 
-export default App; 
- 
+export default App;
