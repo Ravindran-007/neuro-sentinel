@@ -1,80 +1,53 @@
 # ================================================================
-# NEUROSENTINEL LITE — PYTHON 3.12 COMPATIBLE
+# NEUROSENTINEL LITE - PYTHON 3.12 COMPATIBLE
+# Render.com Production Build
 # ================================================================
 
-# ─────────────────────────────────────────────────────────────
-# CORE FRAMEWORK
-# ─────────────────────────────────────────────────────────────
+# ── CORE FRAMEWORK ──────────────────────────────────────────────
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 pydantic==2.5.0
 pydantic-settings==2.1.0
 
-# ─────────────────────────────────────────────────────────────
-# DATA & ML (Python 3.12 compatible)
-# ─────────────────────────────────────────────────────────────
-torch==2.5.1
+# ── PYTORCH (must install BEFORE torch-geometric/scatter) ───────
+# CPU-only version for Render free tier (no GPU)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.1.1+cpu
 numpy==1.26.4
+
+# ── DATA & ML ───────────────────────────────────────────────────
 pandas==2.2.2
 scikit-learn==1.5.0
 
-# ─────────────────────────────────────────────────────────────
-# EMBEDDINGS & LLM INTEGRATION
-# ─────────────────────────────────────────────────────────────
+# ── GNN (install AFTER torch) ───────────────────────────────────
+# torch-scatter and torch-sparse removed — torch-geometric handles them
+torch-geometric==2.4.0
+networkx==3.3
+plotly==5.24.1
+
+# ── EMBEDDINGS & LLM ────────────────────────────────────────────
 requests==2.31.0
 redis==5.0.1
 sentence-transformers==2.2.2
 
-# ─────────────────────────────────────────────────────────────
-# SERVER & UTILITIES
-# ─────────────────────────────────────────────────────────────
+# ── SERVER & UTILITIES ──────────────────────────────────────────
 python-dotenv==1.0.0
 click==8.1.7
 
-# ─────────────────────────────────────────────────────────────
-# DEVELOPMENT & TESTING
-# ─────────────────────────────────────────────────────────────
-pytest==8.3.2
-pytest-asyncio==0.24.0
-httpx==0.27.2
-black==24.8.0
-flake8==7.1.1
-
-# ─────────────────────────────────────────────────────────────
-# LEVEL 4: GNN COMPROMISE PROPAGATION
-# ─────────────────────────────────────────────────────────────
-torch-geometric==2.6.1
-torch-scatter==2.1.2
-torch-sparse==0.6.18
-networkx==3.3
-plotly==5.24.1
-
-# ─────────────────────────────────────────────────────────────
-# LEVEL 4: EVENT STREAMING (KAFKA)
-# ─────────────────────────────────────────────────────────────
+# ── KAFKA (mock mode — lightweight client only) ─────────────────
+# confluent-kafka REMOVED (requires C compiler, fails on Render)
 kafka-python==2.0.2
 
-# ─────────────────────────────────────────────────────────────
-# LEVEL 4: MULTI-TENANT DATABASE
-# ─────────────────────────────────────────────────────────────
+# ── DATABASE ────────────────────────────────────────────────────
 psycopg2-binary==2.9.9
 sqlalchemy==2.0.32
 alembic==1.13.3
 
-# ─────────────────────────────────────────────────────────────
-# LEVEL 4: ENTERPRISE DASHBOARD
-# ─────────────────────────────────────────────────────────────
-streamlit==1.37.1
-
-# ─────────────────────────────────────────────────────────────
-# LEVEL 4: KAFKA EVENT STREAMING
-# ─────────────────────────────────────────────────────────────
-
-kafka-python==2.0.2
-confluent-kafka==2.3.0
-
-# ─────────────────────────────────────────────────────────────
-# OPTIONAL: MONITORING & LOGGING
-# ─────────────────────────────────────────────────────────────
+# ── MONITORING ──────────────────────────────────────────────────
 prometheus-client==0.20.0
 python-json-logger==2.0.7
+
+# ── TESTING ─────────────────────────────────────────────────────
+pytest==8.3.2
+pytest-asyncio==0.24.0
+httpx==0.27.2
