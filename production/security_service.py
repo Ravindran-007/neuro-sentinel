@@ -1,6 +1,6 @@
 # production/security_service.py
 # NeuroSentinel Lite (Level 4 Deployable Production Layer)
-# Fully unified syntax with Dual-Layer Detection and GNN Propagation Engines
+# Fully unified syntax with Dual-Layer Detection
 
 import os
 import json
@@ -17,7 +17,12 @@ import torch
 
 from config.settings import SystemSettings
 from core.engine import IndustrialPipeline, THRESHOLDS, SEMANTIC_DRIFT_LIMITS
-from core.gnn import GNNPropagationDetector
+
+# ─────────────────────────────────────────────────────────────
+# GNN IMPORTS — TEMPORARILY DISABLED FOR RENDER DEPLOYMENT
+# ─────────────────────────────────────────────────────────────
+# from core.gnn import GNNPropagationDetector
+
 from core.kafka_producer import kafka_producer
 
 # --- CONFIGURATION & LOGGING ---
@@ -113,16 +118,19 @@ class AnomalyEvent:
     def to_json(self) -> str:
         return json.dumps(asdict(self))
 
-class AgentData(BaseModel):
-    id: str
-    role: str
-    structural_score: float = 0.0
-    semantic_drift: float = 0.0
-    confidence: float = 0.0
+# ─────────────────────────────────────────────────────────────
+# GNN SCHEMAS — TEMPORARILY DISABLED FOR RENDER DEPLOYMENT
+# ─────────────────────────────────────────────────────────────
+# class AgentData(BaseModel):
+#     id: str
+#     role: str
+#     structural_score: float = 0.0
+#     semantic_drift: float = 0.0
+#     confidence: float = 0.0
 
-class PropagationRequest(BaseModel):
-    agents: List[AgentData]
-    connections: List[List[str]]
+# class PropagationRequest(BaseModel):
+#     agents: List[AgentData]
+#     connections: List[List[str]]
 
 # --- CORE DETECTION ENGINE SINGLETON ---
 class SecurityEngine:
@@ -278,8 +286,12 @@ class SecurityEngine:
 
 # Instantiates Singleton Engines
 engine = SecurityEngine()
-gnn_detector = GNNPropagationDetector(model_path="models/gnn/production_model.pt")
-logger.info("🧠 Level 4 Inductive GraphSAGE Detector Initialized.")
+
+# ─────────────────────────────────────────────────────────────
+# GNN DETECTOR — TEMPORARILY DISABLED FOR RENDER DEPLOYMENT
+# ─────────────────────────────────────────────────────────────
+# gnn_detector = GNNPropagationDetector(model_path="models/gnn/production_model.pt")
+# logger.info("🧠 Level 4 Inductive GraphSAGE Detector Initialized.")
 
 # --- REST ENDPOINTS ---
 @app.post("/api/detect", response_model=DetectionResult)
@@ -352,30 +364,32 @@ async def get_recent_anomalies(agent_role: str, limit: int = 10):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- LEVEL 4 PROPAGATION GRAPH ENDPOINTS ---
-@app.post("/api/propagation/detect")
-async def detect_propagation(request: PropagationRequest):
-    try:
-        agents_dict = [agent.dict() for agent in request.agents]
-        return gnn_detector.detect_propagation(agents_dict, request.connections)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# ─────────────────────────────────────────────────────────────
+# GNN ENDPOINTS — TEMPORARILY DISABLED FOR RENDER DEPLOYMENT
+# ─────────────────────────────────────────────────────────────
+# @app.post("/api/propagation/detect")
+# async def detect_propagation(request: PropagationRequest):
+#     try:
+#         agents_dict = [agent.dict() for agent in request.agents]
+#         return gnn_detector.detect_propagation(agents_dict, request.connections)
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/propagation/graph")
-async def get_propagation_graph():
-    try:
-        return gnn_detector.get_graph_data()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# @app.get("/api/propagation/graph")
+# async def get_propagation_graph():
+#     try:
+#         return gnn_detector.get_graph_data()
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/propagation/status")
-async def get_propagation_status():
-    return {
-        "status": "ready",
-        "model_path": "models/gnn/production_model.pt",
-        "graph_nodes": gnn_detector.graph_builder.get_node_count(),
-        "graph_edges": gnn_detector.graph_builder.get_edge_count()
-    }
+# @app.get("/api/propagation/status")
+# async def get_propagation_status():
+#     return {
+#         "status": "ready",
+#         "model_path": "models/gnn/production_model.pt",
+#         "graph_nodes": gnn_detector.graph_builder.get_node_count(),
+#         "graph_edges": gnn_detector.graph_builder.get_edge_count()
+#     }
 
 # --- SYSTEM EVENT LOOPS ---
 @app.on_event("startup")
