@@ -23,7 +23,10 @@ from core.engine import IndustrialPipeline, THRESHOLDS, SEMANTIC_DRIFT_LIMITS
 # ─────────────────────────────────────────────────────────────
 # from core.gnn import GNNPropagationDetector
 
-from core.kafka_producer import kafka_producer
+# ─────────────────────────────────────────────────────────────
+# KAFKA IMPORTS — DISABLED FOR RENDER DEPLOYMENT
+# ─────────────────────────────────────────────────────────────
+# from core.kafka_producer import kafka_producer
 
 # --- CONFIGURATION & LOGGING ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelname)s: %(message)s')
@@ -241,13 +244,15 @@ class SecurityEngine:
             if redis_client:
                 await self._persist_detection(result)
 
-            # Level 4 Distributed Kafka Production Routing
-            try:
-                if result.overall_status != "CLEAN":
-                    kafka_producer.produce_anomaly(result.dict())
-                kafka_producer.produce_detection(result.dict())
-            except Exception as e:
-                logger.warning(f"Kafka distributed event delivery slipped: {e}")
+            # ─────────────────────────────────────────────────────────────
+            # KAFKA EVENT PRODUCTION — DISABLED FOR RENDER DEPLOYMENT
+            # ─────────────────────────────────────────────────────────────
+            # try:
+            #     if result.overall_status != "CLEAN":
+            #         kafka_producer.produce_anomaly(result.dict())
+            #     kafka_producer.produce_detection(result.dict())
+            # except Exception as e:
+            #     logger.warning(f"Kafka distributed event delivery slipped: {e}")
 
             return result
 
@@ -312,7 +317,6 @@ async def health_check():
 
 @app.get("/api/thresholds")
 async def get_thresholds():
-    # FIXED: Restructured braces to satisfy compilation mapping constraints
     return {
         "structural_thresholds": THRESHOLDS,
         "semantic_drift_limits": SEMANTIC_DRIFT_LIMITS,
