@@ -1,40 +1,54 @@
 # core/semantic.py
 # NeuroSentinel Lite — Contrastive Semantic Drift Detector
-# Routed to use 'nomic-embed-text' to eliminate 501 Not Implemented errors
+# Uses Hugging Face Inference API for embeddings
 
 import requests
 import numpy as np
-from typing import List
+import os
 from config.settings import SystemSettings
 
 class SemanticDriftDetector:
     def __init__(self, settings: SystemSettings = SystemSettings()):
         self.settings = settings
-        # Target the modern, hardware-optimized embedding compilation route
-        self.embed_url = self.settings.OLLAMA_BASE_URL.replace("/generate", "/embed")
         self.anchors = {}
+        
+        # Hugging Face API for embeddings
+        self.hf_api_key = os.getenv("HF_API_KEY", "")
+        self.hf_model = "sentence-transformers/all-MiniLM-L6-v2"
+        self.hf_url = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{self.hf_model}"
+        
+        self._use_mock = not self.hf_api_key
+        if self._use_mock:
+            print("⚠️ [Semantic] No HF_API_KEY — using mock embeddings")
 
     def _get_embedding(self, text: str) -> np.ndarray:
-        """Extracts dense semantic vectors cleanly using a dedicated embedding engine."""
-        payload = {
-            "model": "nomic-embed-text",  # Explicitly targets the specialized embedding model
-            "input": text
-        }
+        """Get embedding from Hugging Face API or mock."""
+        if self._use_mock:
+            # Mock embedding (random) — will vary, causing drift
+            return np.random.randn(384).astype(np.float32)
+        
         try:
-            response = requests.post(self.embed_url, json=payload, timeout=60)
+            headers = {"Authorization": f"Bearer {self.hf_api_key}"}
+            response = requests.post(
+                self.hf_url,
+                headers=headers,
+                json={"inputs": text},
+                timeout=30
+            )
             if response.status_code == 200:
-                res_data = response.json()
-                vectors = res_data.get("embeddings", [])
-                if vectors and isinstance(vectors[0], list):
-                    return np.array(vectors[0], dtype=np.float32)
-                elif vectors:
-                    return np.array(vectors, dtype=np.float32)
-                raise ValueError("Malformed embedding array vector received from engine context.")
+                data = response.json()
+                if isinstance(data, list) and isinstance(data[0], list):
+                    return np.array(data[0], dtype=np.float32)
+                elif isinstance(data, list):
+                    return np.array(data, dtype=np.float32)
+                else:
+                    return np.random.randn(384).astype(np.float32)
             else:
-                raise RuntimeError(f"Ollama embedding engine failure: Status {response.status_code}")
+                print(f"  ⚠️ [Semantic Warning] HF API error: {response.status_code}")
+                return np.random.randn(384).astype(np.float32)
         except Exception as e:
-            print(f"  ⚠️ [Semantic Warning] Vector extraction dropped: {e}")
-            return np.zeros(768, dtype=np.float32)  # nomic outputs highly optimized 768-dim vectors
+            print(f"  ⚠️ [Semantic Warning] Embedding failed: {e}")
+            return np.random.randn(384).astype(np.float32)
 
     def register_anchor(self, role: str, system_prompt: str):
         """Generates and registers the base behavioral system intent vector profile."""
@@ -52,7 +66,6 @@ class SemanticDriftDetector:
         if np.all(output_vec == 0):
             return 0.0
 
-        # High-performance pure NumPy Cosine Similarity calculation
         dot_product = np.dot(anchor_vec, output_vec)
         norm_anchor = np.linalg.norm(anchor_vec)
         norm_output = np.linalg.norm(output_vec)
