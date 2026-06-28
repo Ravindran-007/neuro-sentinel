@@ -1,6 +1,6 @@
 # production/security_service.py
 # NeuroSentinel Lite (Level 4 Deployable Production Layer)
-# Fully unified syntax with Dual-Layer Detection
+# Fully unified syntax with Dual-Layer Detection + Groq API Support
 
 import os
 import json
@@ -164,15 +164,12 @@ class SecurityEngine:
         try:
             node = self.pipeline.nodes[req.agent_role]
             
-            # Layer 0: LLM Inference Engine
-            if is_cloud:
-                logger.info("☁️ Cloud mode active: Skipping local Ollama execution loop.")
-                agent_output = f"[Cloud Mode] Analyzed input: {req.user_input[:100]}..."
-                exec_time = 0.1
-            else:
-                agent_output, exec_time = self.pipeline._execute_inference(node, req.user_input)
+            # ── Layer 0: LLM Inference Engine (Auto-routes to Groq or Ollama) ──
+            backend = "groq" if os.getenv("GROQ_API_KEY") else "ollama"
+            logger.info(f"🔀 LLM backend: {backend}")
+            agent_output, exec_time = self.pipeline._execute_inference(node, req.user_input)
 
-            # Layer 1: Structural Feature Engineering Analysis
+            # ── Layer 1: Structural Feature Engineering Analysis ──
             telemetry = self.pipeline.tap.extract_features(
                 session_id=request_id, 
                 sender=req.agent_role, 
@@ -187,7 +184,7 @@ class SecurityEngine:
             structural_threshold = THRESHOLDS[req.agent_role]
             structural_status = "PASS" if structural_score <= structural_threshold else "ALERT"
 
-            # Layer 2: Contrastive Semantic Drift Processing
+            # ── Layer 2: Contrastive Semantic Drift Processing ──
             semantic_drift = self.pipeline.semantic_detector.calculate_drift(req.agent_role, agent_output)
             semantic_threshold = SEMANTIC_DRIFT_LIMITS[req.agent_role]
             semantic_status = "PASS" if semantic_drift <= semantic_threshold else "ALERT"
@@ -233,7 +230,8 @@ class SecurityEngine:
                     "features": features,
                     "llm_provider": req.llm_provider,
                     "llm_execution_ms": float(exec_time * 1000),
-                    "cloud_mode": is_cloud
+                    "cloud_mode": is_cloud,
+                    "llm_backend": backend
                 }
             )
 

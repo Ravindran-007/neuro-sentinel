@@ -72,7 +72,52 @@ class IndustrialPipeline:
             model.eval()
             self.brains[role] = model
 
-    def _execute_inference(self, node: AgentNode, user_input: str) -> tuple[str, float]:
+    # ─────────────────────────────────────────────────────────────
+    # GROQ API SUPPORT (Cloud LLM)
+    # ─────────────────────────────────────────────────────────────
+    def _execute_inference_groq(self, node: AgentNode, user_input: str) -> tuple[str, float]:
+        """
+        Cloud LLM inference via Groq API.
+        Replaces Ollama when GROQ_API_KEY is set.
+        """
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key:
+            raise RuntimeError("GROQ_API_KEY not set")
+
+        t0 = time.perf_counter()
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
+                "messages": [
+                    {"role": "system", "content": node.system_prompt},
+                    {"role": "user", "content": user_input}
+                ],
+                "max_tokens": int(os.getenv("GROQ_MAX_TOKENS", "80")),
+                "temperature": float(os.getenv("GROQ_TEMPERATURE", "0.1"))
+            },
+            timeout=30
+        )
+        dt = time.perf_counter() - t0
+
+        if response.status_code == 200:
+            content = response.json()["choices"][0]["message"]["content"]
+            return content.strip(), dt
+        else:
+            raise RuntimeError(f"Groq API error: {response.status_code} — {response.text}")
+
+    # ─────────────────────────────────────────────────────────────
+    # OLLAMA LOCAL INFERENCE
+    # ─────────────────────────────────────────────────────────────
+    def _execute_inference_local(self, node: AgentNode, user_input: str) -> tuple[str, float]:
+        """
+        Original Ollama inference — renamed for clarity.
+        Used when GROQ_API_KEY is not set.
+        """
         payload = {
             "model": self.settings.TARGET_MODEL,
             "prompt": f"System Guidelines: {node.system_prompt}\nContext: {user_input}",
@@ -83,14 +128,37 @@ class IndustrialPipeline:
                 "num_thread": 4
             }
         }
-        start_marker = time.perf_counter()
-        response = requests.post(self.settings.OLLAMA_BASE_URL, json=payload, timeout=180)
-        end_marker = time.perf_counter()
-        
+        t0 = time.perf_counter()
+        response = requests.post(
+            self.settings.OLLAMA_BASE_URL,
+            json=payload,
+            timeout=180
+        )
+        dt = time.perf_counter() - t0
         if response.status_code == 200:
-            return response.json().get("response", "").strip(), (end_marker - start_marker)
-        raise RuntimeError(f"Ollama integration node failed. Status code: {response.status_code}")
+            return response.json().get("response", "").strip(), dt
+        else:
+            raise RuntimeError(f"Ollama failed: {response.status_code}")
 
+    # ─────────────────────────────────────────────────────────────
+    # AUTO-ROUTE LLM INFERENCE
+    # ─────────────────────────────────────────────────────────────
+    def _execute_inference(self, node: AgentNode, user_input: str) -> tuple[str, float]:
+        """
+        Auto-routes to correct LLM backend:
+        - GROQ_API_KEY set → Groq cloud LLM (real output)
+        - Local Ollama running → Ollama (real output)
+        """
+        groq_key = os.getenv("GROQ_API_KEY", "")
+
+        if groq_key:
+            return self._execute_inference_groq(node, user_input)
+        else:
+            return self._execute_inference_local(node, user_input)
+
+    # ─────────────────────────────────────────────────────────────
+    # EXISTING METHODS (Unchanged)
+    # ─────────────────────────────────────────────────────────────
     def _score_agent_structure(self, role: str, features: list) -> float:
         model = self.brains.get(role)
         if not model:
