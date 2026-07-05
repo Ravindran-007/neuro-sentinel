@@ -20,6 +20,12 @@ from config.settings import SystemSettings
 from core.engine import IndustrialPipeline, THRESHOLDS, SEMANTIC_DRIFT_LIMITS
 
 # ─────────────────────────────────────────────────────────────
+# FORCE CLOUD_MODE OFF — OVERRIDE RENDER
+# ─────────────────────────────────────────────────────────────
+os.environ["CLOUD_MODE"] = "false"
+print("🔴 FORCED: CLOUD_MODE = false (overriding RENDER)")
+
+# ─────────────────────────────────────────────────────────────
 # GNN IMPORTS — TEMPORARILY DISABLED FOR RENDER DEPLOYMENT
 # ─────────────────────────────────────────────────────────────
 # from core.gnn import GNNPropagationDetector
@@ -202,7 +208,9 @@ class SecurityEngine:
         self.request_count += 1
         validate_agent_role(req.agent_role)
         start_time = time.perf_counter()
-        is_cloud = os.getenv("RENDER", "false").lower() == "true"
+        
+        # ✅ FIXED: Use CLOUD_MODE instead of RENDER
+        is_cloud = os.getenv("CLOUD_MODE", "false").lower() == "true"
 
         try:
             node = self.pipeline.nodes.get(req.agent_role)
@@ -261,6 +269,7 @@ class SecurityEngine:
 
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             
+            # ✅ FIXED: Use CLOUD_MODE for metadata
             result = DetectionResult(
                 request_id=request_id,
                 timestamp=datetime.utcnow().isoformat(),
@@ -280,7 +289,7 @@ class SecurityEngine:
                     "features": features,
                     "llm_provider": req.llm_provider,
                     "llm_execution_ms": float(exec_time * 1000),
-                    "cloud_mode": is_cloud,
+                    "cloud_mode": is_cloud,  # ✅ FIXED: Now uses CLOUD_MODE
                     "llm_backend": backend
                 }
             )
