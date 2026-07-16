@@ -2,8 +2,6 @@ data/
 __pycache__/
 *.pyc
 .env
-*.pt
-*.pth
 .pytest_cache/
 htmlcov/
 .coverage
@@ -12,3 +10,5 @@ htmlcov/
 *.pid
 *.pid.lock
 *.sqlite3
+.vercel
+.env*

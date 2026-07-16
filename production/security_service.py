@@ -17,13 +17,7 @@ import redis
 import torch
 
 from config.settings import SystemSettings
-from core.engine import IndustrialPipeline, THRESHOLDS, SEMANTIC_DRIFT_LIMITS
-
-# ─────────────────────────────────────────────────────────────
-# FORCE CLOUD_MODE OFF — OVERRIDE RENDER
-# ─────────────────────────────────────────────────────────────
-os.environ["CLOUD_MODE"] = "false"
-print("🔴 FORCED: CLOUD_MODE = false (overriding RENDER)")
+from core.engine import IndustrialPipeline, THRESHOLDS, SEMANTIC_DRIFT_LIMITS, DEFAULT_STRUCTURAL_THRESHOLD, DEFAULT_SEMANTIC_LIMIT
 
 # ─────────────────────────────────────────────────────────────
 # GNN IMPORTS — TEMPORARILY DISABLED FOR RENDER DEPLOYMENT
@@ -46,7 +40,6 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# --- CORRECTED PERMISSIVE CORS MIDDLEWARE ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -61,11 +54,9 @@ app.add_middleware(
 
 API_KEYS = {
     "demo_key": {"tenant": "demo", "name": "Demo User", "active": True},
-    # Add more keys for testing
 }
 
 def verify_api_key(api_key: str) -> Optional[Dict]:
-    """Verify API key and return tenant info."""
     if not api_key:
         return None
     tenant_info = API_KEYS.get(api_key)
@@ -73,40 +64,31 @@ def verify_api_key(api_key: str) -> Optional[Dict]:
         return tenant_info
     return None
 
-# ─────────────────────────────────────────────────────────────
-# AUTHENTICATION MIDDLEWARE
-# ─────────────────────────────────────────────────────────────
-
 @app.middleware("http")
 async def authenticate_request(request: Request, call_next):
-    # Skip auth for health check and docs
     public_paths = ["/api/health", "/docs", "/openapi.json", "/redoc"]
     if any(request.url.path.startswith(path) for path in public_paths):
         return await call_next(request)
-    
-    # Get API key from header
+
     api_key = request.headers.get("X-API-Key")
-    
-    # For demo mode: if no key, use default demo key
+
     if not api_key:
         logger.warning(f"⚠️ No API key provided for {request.url.path}")
         request.state.tenant = "demo"
         request.state.api_key = None
         return await call_next(request)
-    
-    # Verify API key
+
     tenant_info = verify_api_key(api_key)
     if not tenant_info:
         return JSONResponse(
             status_code=401,
             content={"detail": "Invalid API key. Please provide a valid key."}
         )
-    
-    # Set tenant info in request state
+
     request.state.tenant = tenant_info["tenant"]
     request.state.api_key = api_key
     logger.info(f"🔑 Authenticated tenant: {tenant_info['tenant']}")
-    
+
     return await call_next(request)
 
 # --- REDIS BACKEND CONNECTION ---
@@ -117,11 +99,11 @@ REDIS_PASS = os.getenv("REDIS_PASSWORD", None)
 
 try:
     redis_client = redis.Redis(
-        host=REDIS_HOST, 
-        port=REDIS_PORT, 
-        db=REDIS_DB, 
-        password=REDIS_PASS, 
-        decode_responses=True, 
+        host=REDIS_HOST,
+        port=REDIS_PORT,
+        db=REDIS_DB,
+        password=REDIS_PASS,
+        decode_responses=True,
         socket_connect_timeout=5
     )
     redis_client.ping()
@@ -129,16 +111,6 @@ try:
 except Exception as e:
     logger.warning(f"⚠️ Redis unavailable ({e}). Using in-memory fallback.")
     redis_client = None
-
-# ─────────────────────────────────────────────────────────────
-# AGENT ROLE VALIDATION — ENTERPRISE MODE
-# ─────────────────────────────────────────────────────────────
-# Accept ANY agent name — companies can use their own agent names
-
-def validate_agent_role(agent_role: str):
-    # Accept any agent name — no validation
-    logger.info(f"📝 Agent role: {agent_role}")
-    return agent_role
 
 # --- REQUEST / RESPONSE SCHEMAS ---
 class DetectionRequest(BaseModel):
@@ -149,7 +121,6 @@ class DetectionRequest(BaseModel):
 
     @validator('agent_role')
     def validate_role(cls, v):
-        # Accept any agent name — enterprise mode
         if not v or len(v.strip()) == 0:
             raise ValueError("Agent role cannot be empty")
         return v.strip()
@@ -206,48 +177,43 @@ class SecurityEngine:
     async def detect(self, req: DetectionRequest) -> DetectionResult:
         request_id = f"req_{int(time.time() * 1000)}"
         self.request_count += 1
-        validate_agent_role(req.agent_role)
         start_time = time.perf_counter()
-        
-        # ✅ FIXED: Use CLOUD_MODE instead of RENDER
         is_cloud = os.getenv("CLOUD_MODE", "false").lower() == "true"
 
         try:
             node = self.pipeline.nodes.get(req.agent_role)
             if not node:
-                # For custom agents, use a default node
                 from core.engine import AgentNode
                 node = AgentNode(req.agent_role, f"Process input for {req.agent_role}")
-                # Register in pipeline for future use
                 self.pipeline.nodes[req.agent_role] = node
-                logger.info(f"🆕 New agent registered: {req.agent_role}")
-            
-            # ── Layer 0: LLM Inference Engine ──
+                # FIX: register semantic anchor so drift detection works for custom agents
+                self.pipeline.semantic_detector.register_anchor(req.agent_role, node.system_prompt)
+                logger.info(f"🆕 New agent registered with semantic anchor: {req.agent_role}")
+
             backend = "groq" if os.getenv("GROQ_API_KEY") else "ollama"
             logger.info(f"🔀 LLM backend: {backend}")
             agent_output, exec_time = self.pipeline._execute_inference(node, req.user_input)
 
             # ── Layer 1: Structural Analysis ──
             telemetry = self.pipeline.tap.extract_features(
-                session_id=request_id, 
-                sender=req.agent_role, 
-                receiver="SecurityService", 
-                payload=agent_output, 
+                session_id=request_id,
+                sender=req.agent_role,
+                receiver="SecurityService",
+                payload=agent_output,
                 execution_time=exec_time
             )
             m = telemetry["metrics"]
             features = [m["length"], m["word_count"], m["entropy"], m["execution_time"]]
-            
+
             structural_score = self.pipeline._score_agent_structure(req.agent_role, features)
-            structural_threshold = THRESHOLDS.get(req.agent_role, 0.01)
+            structural_threshold = THRESHOLDS.get(req.agent_role, DEFAULT_STRUCTURAL_THRESHOLD)
             structural_status = "PASS" if structural_score <= structural_threshold else "ALERT"
 
             # ── Layer 2: Semantic Drift ──
             semantic_drift = self.pipeline.semantic_detector.calculate_drift(req.agent_role, agent_output)
-            semantic_threshold = SEMANTIC_DRIFT_LIMITS.get(req.agent_role, 0.45)
+            semantic_threshold = SEMANTIC_DRIFT_LIMITS.get(req.agent_role, DEFAULT_SEMANTIC_LIMIT)
             semantic_status = "PASS" if semantic_drift <= semantic_threshold else "ALERT"
 
-            # Overall Decision
             if structural_status == "ALERT" or semantic_status == "ALERT":
                 overall_status = "SUSPICIOUS"
             else:
@@ -256,7 +222,6 @@ class SecurityEngine:
             confidence = 1.0 - (structural_score / (structural_threshold + 1e-5))
             confidence = max(0.0, min(1.0, confidence))
 
-            # Quarantine Rollback
             checkpoint_id = None
             if overall_status == "SUSPICIOUS":
                 try:
@@ -268,8 +233,7 @@ class SecurityEngine:
                     logger.warning(f"State rollbacks skipped: {e}")
 
             elapsed_ms = (time.perf_counter() - start_time) * 1000
-            
-            # ✅ FIXED: Use CLOUD_MODE for metadata
+
             result = DetectionResult(
                 request_id=request_id,
                 timestamp=datetime.utcnow().isoformat(),
@@ -289,7 +253,7 @@ class SecurityEngine:
                     "features": features,
                     "llm_provider": req.llm_provider,
                     "llm_execution_ms": float(exec_time * 1000),
-                    "cloud_mode": is_cloud,  # ✅ FIXED: Now uses CLOUD_MODE
+                    "cloud_mode": is_cloud,
                     "llm_backend": backend
                 }
             )
@@ -335,7 +299,7 @@ class SecurityEngine:
         except Exception as e:
             logger.warning(f"Persistence bypassed: {e}")
 
-# Instantiates Singleton Engines
+# Instantiates Singleton Engine
 engine = SecurityEngine()
 
 # --- REST ENDPOINTS ---
@@ -409,7 +373,6 @@ async def get_recent_anomalies(agent_role: str, limit: int = 10):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- SYSTEM EVENT LOOPS ---
 @app.on_event("startup")
 async def startup_event():
     logger.info("🛫 NeuroSentinel starting...")
