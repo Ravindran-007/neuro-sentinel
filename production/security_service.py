@@ -231,6 +231,19 @@ class SecurityEngine:
                     overall_status = "QUARANTINED"
                 except Exception as e:
                     logger.warning(f"State rollbacks skipped: {e}")
+            else:
+                # Save checkpoint for clean output
+                try:
+                    self.pipeline.checkpoints.save(
+                        agent_id=req.agent_role,
+                        input_text=req.user_input,
+                        output_text=agent_output,
+                        telemetry=m,
+                        mse=structural_score
+                    )
+                    checkpoint_id = request_id
+                except Exception as e:
+                    logger.warning(f"Checkpoint save skipped: {e}")
 
             elapsed_ms = (time.perf_counter() - start_time) * 1000
 
