@@ -6,7 +6,11 @@ import json
 import copy
 import time
 import os
+import logging
 from config.settings import SystemSettings
+
+# Setup logger
+logger = logging.getLogger("NeuroSentinel-Checkpoint")
 
 
 class AgentCheckpoint:
@@ -27,6 +31,7 @@ class AgentCheckpoint:
         self.checkpoints = {}   # agent_id -> checkpoint dict
         self.path = os.path.join(settings.RAW_DATA_DIR, "checkpoints.json")
         self._load()
+        logger.info(f"📂 Checkpoint path: {self.path}")
 
     def _load(self):
         """Load existing checkpoints from disk on startup."""
@@ -34,16 +39,23 @@ class AgentCheckpoint:
             try:
                 with open(self.path, "r") as f:
                     self.checkpoints = json.load(f)
-            except Exception:
+                logger.info(f"✅ Loaded {len(self.checkpoints)} checkpoints from {self.path}")
+            except Exception as e:
+                logger.error(f"❌ Failed to load checkpoints: {e}")
                 self.checkpoints = {}
         else:
+            logger.info(f"📝 No checkpoint file found at {self.path}, starting fresh")
             self.checkpoints = {}
 
     def _save(self):
         """Persist checkpoints to disk immediately after every update."""
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        with open(self.path, "w") as f:
-            json.dump(self.checkpoints, f, indent=2)
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            with open(self.path, "w") as f:
+                json.dump(self.checkpoints, f, indent=2)
+            logger.info(f"💾 Saved checkpoints to {self.path}")
+        except Exception as e:
+            logger.error(f"❌ Failed to save checkpoints: {e}")
 
     def save(self, agent_id: str, input_text: str,
              output_text: str, telemetry: dict, mse: float):
@@ -51,6 +63,8 @@ class AgentCheckpoint:
         Save a verified clean checkpoint for an agent.
         Only call this when mse < threshold (confirmed clean).
         """
+        logger.info(f"💾 [Checkpoint] Saving checkpoint for {agent_id}")
+        
         self.checkpoints[agent_id] = {
             "agent_id":    agent_id,
             "input_text":  input_text,
@@ -59,14 +73,20 @@ class AgentCheckpoint:
             "mse":         mse,
             "saved_at":    time.time()
         }
+        
+        logger.info(f"📝 [Checkpoint] Checkpoint data: {self.checkpoints[agent_id]}")
         self._save()
+        logger.info(f"✅ [Checkpoint] Checkpoint saved for {agent_id}")
 
     def restore(self, agent_id: str) -> dict | None:
         """
         Retrieve last clean checkpoint for an agent.
         Returns None if no clean run has been saved yet.
         """
-        return self.checkpoints.get(agent_id, None)
+        logger.info(f"🔍 [Checkpoint] Restoring checkpoint for {agent_id}")
+        result = self.checkpoints.get(agent_id, None)
+        logger.info(f"📋 [Checkpoint] Restored: {result}")
+        return result
 
     def retrieve_safe_checkpoint(self, agent_id: str) -> dict | None:
         """
@@ -74,7 +94,10 @@ class AgentCheckpoint:
         Alias for restore() for API compatibility.
         Returns None if no clean run has been saved yet.
         """
-        return self.checkpoints.get(agent_id, None)
+        logger.info(f"🔍 [Checkpoint] Retrieving checkpoint for {agent_id}")
+        result = self.checkpoints.get(agent_id, None)
+        logger.info(f"📋 [Checkpoint] Retrieved: {result}")
+        return result
 
     def has(self, agent_id: str) -> bool:
         """Check if a checkpoint exists for this agent."""
