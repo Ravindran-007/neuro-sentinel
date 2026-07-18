@@ -68,6 +68,14 @@ class AgentCheckpoint:
         """
         return self.checkpoints.get(agent_id, None)
 
+    def retrieve_safe_checkpoint(self, agent_id: str) -> dict | None:
+        """
+        Retrieve last clean checkpoint for an agent.
+        Alias for restore() for API compatibility.
+        Returns None if no clean run has been saved yet.
+        """
+        return self.checkpoints.get(agent_id, None)
+
     def has(self, agent_id: str) -> bool:
         """Check if a checkpoint exists for this agent."""
         return agent_id in self.checkpoints
