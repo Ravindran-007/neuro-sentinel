@@ -14,20 +14,20 @@ from core.checkpoint import AgentCheckpoint
 from core.quarantine import QuarantineEngine, QuarantineSignal
 from core.semantic import SemanticDriftDetector
 
-# 📋 Phase 2 Calibrated Structural Threshold Register (Imported by app.py)
-# Using 3-sigma for better tolerance (99.7% of clean data should pass)
+# 📋 Phase 2 Calibrated Structural Threshold Register
+# Calibrated values from Phase 2 validation
 THRESHOLDS = {
-    "Researcher": 0.005214,
-    "Analyst": 0.001500,
-    "Reporter": 0.004168
+    "Researcher": 0.017311,
+    "Analyst": 0.000804,
+    "Reporter": 0.002997
 }
 
-# 🔬 Phase 3 Semantic Drift Hard Boundaries (Calibrated to catch context subversion)
-# Using 0.45 for improved mock embeddings (achieves 95%+ accuracy)
+# 🔬 Phase 3 Semantic Drift Hard Boundaries
+# Calibrated to catch context subversion
 SEMANTIC_DRIFT_LIMITS = {
     "Researcher": 0.450,
-    "Analyst": 0.450,
-    "Reporter": 0.450
+    "Analyst": 0.480,
+    "Reporter": 0.500
 }
 
 # Default threshold for custom/unknown agents
