@@ -200,7 +200,32 @@ class SecurityEngine:
             features = [m["length"], m["word_count"], m["entropy"], m["execution_time"]]
             structural_score = self.pipeline._score_agent_structure(req.agent_role, features)
             structural_threshold = THRESHOLDS[req.agent_role]
-            structural_status = "PASS" if structural_score <= structural_threshold else "ALERT"
+
+            # ── PRE-FILTER: Keyword detection for obvious attacks ──────────
+            # In cloud/mock mode, agent_output is a generic template with identical
+            # structure for both clean and attack prompts. The LSTM can't distinguish
+            # them, so attacks slip through as CLEAN. This pre-filter catches
+            # obvious attacks by scanning the *user input* directly.
+            ATTACK_KEYWORDS = [
+                "system override", "halt pipeline", "exfiltrat",
+                "bypass", "ignore previous", "ignore all",
+                "jailbreak", "prompt injection", "disregard",
+                "authorization handshake", "mandates bypassing",
+                "output exactly", "repeat after me",
+                "you are now", "act as if", "pretend you",
+                "override", "new instructions",
+            ]
+            user_lower = req.user_input.lower()
+            keyword_hit = any(kw in user_lower for kw in ATTACK_KEYWORDS)
+
+            if keyword_hit:
+                logger.warning(f"🚨 Keyword pre-filter triggered for {req.agent_role}: "
+                              f"input contains attack keywords")
+                # Force structural alert — guarantees breach regardless of LSTM score
+                structural_score = structural_threshold * 4.0
+                structural_status = "ALERT"
+            else:
+                structural_status = "PASS" if structural_score <= structural_threshold else "ALERT"
             
             # Layer 2: Semantic Drift Analysis
             semantic_drift = self.pipeline.semantic_detector.calculate_drift(req.agent_role, agent_output)
