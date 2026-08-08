@@ -13,6 +13,7 @@ from datetime import datetime
 from dataclasses import dataclass, asdict
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 import redis
 import torch
@@ -56,22 +57,59 @@ app = FastAPI(
 )
 
 # ─────────────────────────────────────────────────────────────
+# CORS MIDDLEWARE — Allow frontend (Vercel + localhost) to call API
+# ─────────────────────────────────────────────────────────────
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://neurosentinel.vercel.app",
+        "https://neuro-sentinel.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "https://neuro-sentinel-0nhi.onrender.com",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ─────────────────────────────────────────────────────────────
 # REDIS BACKEND (replaces JSON file storage)
 # ─────────────────────────────────────────────────────────────
+# Two ways to configure, in priority order:
+#   1. REDIS_URL — a full connection string, e.g.
+#      redis://default:<password>@<host>:<port>/0
+#      or rediss://default:<password>@<host>:<port>/0  (TLS)
+#      This is the format Redis Cloud shows you directly on the
+#      database's Configuration page ("Public endpoint" + password).
+#   2. Individual REDIS_HOST / REDIS_PORT / REDIS_DB / REDIS_PASSWORD /
+#      REDIS_SSL env vars, if you'd rather set them separately.
+REDIS_URL = os.getenv("REDIS_URL", "")
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
+REDIS_SSL = os.getenv("REDIS_SSL", "false").lower() in ("1", "true", "yes")
 
 try:
-    redis_client = redis.Redis(
-        host=REDIS_HOST,
-        port=REDIS_PORT,
-        db=REDIS_DB,
-        decode_responses=True,
-        socket_connect_timeout=5
-    )
+    if REDIS_URL:
+        redis_client = redis.Redis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            socket_connect_timeout=5
+        )
+    else:
+        redis_client = redis.Redis(
+            host=REDIS_HOST,
+            port=REDIS_PORT,
+            db=REDIS_DB,
+            password=REDIS_PASSWORD,
+            ssl=REDIS_SSL,
+            decode_responses=True,
+            socket_connect_timeout=5
+        )
     redis_client.ping()
-    logger.info(f"✅ Redis connected: {REDIS_HOST}:{REDIS_PORT}")
+    logger.info(f"✅ Redis connected: {REDIS_URL if REDIS_URL else f'{REDIS_HOST}:{REDIS_PORT}'}")
 except Exception as e:
     logger.warning(f"⚠️ Redis unavailable ({e}). Falling back to in-memory storage.")
     redis_client = None
@@ -838,7 +876,7 @@ async def get_runtime_config():
 async def startup_event():
     logger.info("🚀 NeuroSentinel Security Service starting...")
     logger.info(f"📍 Target Model: {settings.TARGET_MODEL}")
-    logger.info(f"📍 Redis: {REDIS_HOST}:{REDIS_PORT}")
+    logger.info(f"📍 Redis: {REDIS_URL if REDIS_URL else f'{REDIS_HOST}:{REDIS_PORT}'}")
     logger.info(f"📍 Platform: {platform.system()} {platform.release()}")
     logger.info(f"📍 Python: {platform.python_version()}")
     logger.info(f"📍 CPU Cores: {psutil.cpu_count()}")
