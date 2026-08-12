@@ -117,7 +117,7 @@ const fetchData = useCallback(async (retryCount = 0) => {
   const defaultMSE = { Researcher: 0.0145, Analyst: 0.0182, Reporter: 0.0056 };
   const defaultDrift = { Researcher: 0.501, Analyst: 0.690, Reporter: 0.730 };
 
-  const fetchAgentData = useCallback(async () => {
+  // eslint-disable-next-line react-hooks/exhaustive-deps`n// eslint-disable-next-line react-hooks/exhaustive-deps`nconst fetchAgentData = useCallback(async () => {
     try {
       const agents = ['Researcher', 'Analyst', 'Reporter'];
       const results = await Promise.all(
