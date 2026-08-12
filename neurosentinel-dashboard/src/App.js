@@ -68,14 +68,14 @@ export default function App() {
   const [thresholds, setThresholds] = useState(null);
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState(null);
-  const [history, setHistory]       = useState([]);
-  const [alerts, setAlerts]         = useState([]);
+  const [history, setHistory]       = useState([defaultDrift, defaultMSE]);
+  const [alerts, setAlerts]         = useState([defaultDrift, defaultMSE]);
 
   const [testAgent, setTestAgent]   = useState('Analyst');
   const [testInput, setTestInput]   = useState('');
   const [testResult, setTestResult] = useState(null);
   const [testLoading, setTestLoading] = useState(false);
-  const [testHistory, setTestHistory] = useState([]);
+  const [testHistory, setTestHistory] = useState([defaultDrift, defaultMSE]);
 
   const [simAgent,   setSimAgent]   = useState('Analyst');
   const [simInput]                  = useState('');
@@ -112,7 +112,7 @@ const fetchData = useCallback(async (retryCount = 0) => {
         setLoading(false);
       }
     }
-  }, []);
+  }, [defaultDrift, defaultMSE]);
 
   const defaultMSE = { Researcher: 0.0145, Analyst: 0.0182, Reporter: 0.0056 };
   const defaultDrift = { Researcher: 0.501, Analyst: 0.690, Reporter: 0.730 };
@@ -150,12 +150,12 @@ const fetchAgentData = useCallback(async () => {
       setNodes(newNodes);
     } catch (e) {
     }
-  }, []);
+  }, [defaultDrift, defaultMSE]);
 
   useEffect(() => {
     axios.get(`${API_URL}/api/health`, { timeout: 70000 })
       .catch(() => {});
-  }, []);
+  }, [defaultDrift, defaultMSE]);
 
   useEffect(() => {
     fetchData();
