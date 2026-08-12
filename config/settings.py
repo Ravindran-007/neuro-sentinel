@@ -8,4 +8,4 @@ class SystemSettings:
     RAW_DATA_DIR: str = "data"
     SECURITY_LOG_FILE: str = os.path.join("data", "telemetry_stream.json")
     SLIDING_WINDOW_SIZE: int = 5
-    FEATURE_DIMENSION: int = 4  # [len, word_count, entropy, exec_time]
+    FEATURE_DIMENSION: int = 4

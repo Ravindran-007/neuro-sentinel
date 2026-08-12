@@ -1,0 +1,54 @@
+Metadata-Version: 2.4
+Name: neurosentinel
+Version: 1.0.0
+Summary: AI Security for Multi-Agent LLM Pipelines
+Home-page: https://neuro-sentinel-0nhi.onrender.com
+Author: Ravindran M
+Author-email: ravindran07@example.com
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: Topic :: Security
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: requests>=2.31.0
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
+\# NeuroSentinel
+
+
+
+\*\*AI Security for Multi-Agent LLM Pipelines\*\*
+
+
+
+NeuroSentinel is a production-grade security system that detects and tracks compromise in multi-agent LLM pipelines using dual-layer detection (LSTM structural + semantic drift) and GNN propagation tracking.
+
+
+
+\## Quick Start
+
+
+
+\### Installation
+
+
+
+```bash
+
+pip install neurosentinel
+

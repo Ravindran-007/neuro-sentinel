@@ -7,7 +7,6 @@ class LSTMAutoencoder(nn.Module):
         self.sequence_length = sequence_length
         self.feature_dim = feature_dim
         
-        # Encoder
         self.encoder_lstm = nn.LSTM(
             input_size=feature_dim,
             hidden_size=hidden_dim,
@@ -15,7 +14,6 @@ class LSTMAutoencoder(nn.Module):
             batch_first=True
         )
         
-        # Decoder
         self.decoder_lstm = nn.LSTM(
             input_size=hidden_dim,
             hidden_size=hidden_dim,

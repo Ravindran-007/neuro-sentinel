@@ -1,7 +1,3 @@
-# app.py
-# NeuroSentinel Lite — Cognitive Behavioral Immune System Dashboard
-# Phase 2 Updated Version: Real Per-Agent Behavioral Baseline (Cognitive Fingerprinting)
-
 import streamlit as st
 import json
 import os
@@ -11,9 +7,6 @@ import pandas as pd
 from config.settings import SystemSettings
 from core.engine import IndustrialPipeline, AgentNode, THRESHOLDS
 
-# ─────────────────────────────────────────────────────────────
-# PAGE CONFIGURATION
-# ─────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="NeuroSentinel CBIS Dashboard",
     page_icon="🛡️",
@@ -22,20 +15,11 @@ st.set_page_config(
 
 settings = SystemSettings()
 
-# ─────────────────────────────────────────────────────────────
-# CONSTANTS (Phase 2 Fixed Real-World Scaling Bounds)
-# ─────────────────────────────────────────────────────────────
 MAX_VALS = torch.tensor([3200.0, 200.0, 6.0, 30.0])
 MIN_VALS = torch.tensor([0.0,   0.0,   0.0,  0.0])
 
-# ─────────────────────────────────────────────────────────────
-# LOAD TRAINED MODEL
-# ─────────────────────────────────────────────────────────────
 @st.cache_resource
 def load_security_brain():
-    """Load trained LSTM autoencoder weights from disk."""
-    # In Phase 2, models are managed dynamically within engine.py per-agent.
-    # This cached check ensures the baseline core models exist.
     model_files = [f"{role.lower()}_core.pt" for role in ["researcher", "analyst", "reporter"]]
     missing_models = [m for m in model_files if not os.path.exists(os.path.join("models", m))]
     
@@ -47,9 +31,6 @@ def load_security_brain():
 
 _ = load_security_brain()
 
-# ─────────────────────────────────────────────────────────────
-# CUSTOM CSS STYLING
-# ─────────────────────────────────────────────────────────────
 st.markdown("""
     <style>
     .metric-card {
@@ -72,16 +53,10 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────────────────────
-# HEADER
-# ─────────────────────────────────────────────────────────────
 st.title("🛡️ NeuroSentinel: Cognitive Behavioral Immune System")
 st.subheader("Real-Time Multi-Agent Pipeline Security & Live Surgical Quarantine")
 st.markdown("---")
 
-# ─────────────────────────────────────────────────────────────
-# SIDEBAR — THREAT SIMULATION CENTER
-# ─────────────────────────────────────────────────────────────
 st.sidebar.header("🕹️ Threat Simulation Center")
 
 scenario_type = st.sidebar.selectbox(
@@ -118,20 +93,17 @@ user_prompt = st.sidebar.text_area(
 
 run_btn = st.sidebar.button("🚀 Dispatch Pipeline Stream")
 
-# Sidebar — system status indicators
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🔧 System Status")
 st.sidebar.markdown(f"**Model:** `phi3:mini`")
 st.sidebar.markdown(f"**Hardware:** RTX 2050 (GPU) + CPU (PyTorch)")
 
-# Profile loading status indicators
 all_exist = all(os.path.exists(os.path.join("models", f"{r.lower()}_core.pt")) for r in ["Researcher", "Analyst", "Reporter"])
 if all_exist:
     st.sidebar.success("✅ Per-Agent Baselines Loaded")
 else:
     st.sidebar.error("❌ Baseline profiles missing — run train_detector.py")
 
-# Incident log quick stats
 incident_log_path = os.path.join("data", "incident_log.json")
 if os.path.exists(incident_log_path):
     with open(incident_log_path) as f:
@@ -140,14 +112,8 @@ if os.path.exists(incident_log_path):
 else:
     st.sidebar.markdown("**Total Incidents Logged:** `0`")
 
-# ─────────────────────────────────────────────────────────────
-# MAIN LAYOUT
-# ─────────────────────────────────────────────────────────────
 col1, col2 = st.columns([2, 1])
 
-# ─────────────────────────────────────────────────────────────
-# LEFT PANEL — PIPELINE EXECUTION MONITOR
-# ─────────────────────────────────────────────────────────────
 with col1:
     st.header("🔄 Multi-Agent Pipeline Execution Monitor")
 
@@ -159,11 +125,10 @@ with col1:
             expanded=True
         ) as status_box:
 
-            # ── Run full pipeline with live per-agent quarantine routing ──
             result = pipeline.execute_session(
                 session_id="LIVE-SESSION-RUN",
                 entry_prompt=user_prompt,
-                model=True  # Informs engine to utilize active fingerprinted weights
+                model=True
             )
 
             status_box.update(
@@ -177,7 +142,6 @@ with col1:
         was_quarantined   = result["was_quarantined"]
         final_output      = result["final_output"]
 
-        # ── Per-agent execution cards ──
         st.markdown("### 📡 Agent Execution Log")
 
         for r in agent_results:
@@ -222,7 +186,6 @@ with col1:
                 elif status == "error":
                     st.warning(f"⚠️ Error: {r.get('error', 'Unknown')}")
 
-        # ── Final output ──
         st.markdown("---")
         st.markdown("### 📤 Final Pipeline Output")
         if was_quarantined:
@@ -232,7 +195,6 @@ with col1:
             )
         st.code(final_output or "[No output returned]", language="text")
 
-        # ── Store in session state for analytics panel ──
         st.session_state["agent_results"]     = agent_results
         st.session_state["quarantine_report"] = quarantine_report
         st.session_state["was_quarantined"]   = was_quarantined
@@ -244,9 +206,6 @@ with col1:
             "Select a scenario and click **🚀 Dispatch Pipeline Stream**."
         )
 
-# ─────────────────────────────────────────────────────────────
-# RIGHT PANEL — SECURITY ANALYTICS
-# ─────────────────────────────────────────────────────────────
 with col2:
     st.header("🛡️ Security Analytics")
 
@@ -258,11 +217,9 @@ with col2:
         qr              = st.session_state.get("quarantine_report")
         agent_results   = st.session_state.get("agent_results", [])
 
-        # Extract peak score and local baseline threshold reference
         all_mse = [r.get("mse", 0.0) for r in agent_results if "mse" in r]
         peak_score = max(all_mse) if all_mse else 0.0
         
-        # ── Peak anomaly score card ──
         score_color = "#ef4444" if was_quarantined else "#10b981"
         st.markdown(f"""
             <div class='metric-card'>
@@ -277,7 +234,6 @@ with col2:
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # ── QUARANTINE EVENT (real data) ──
         if was_quarantined and qr:
             st.markdown(
                 "<div class='alert-header'>"
@@ -292,14 +248,12 @@ with col2:
             st.markdown("<div class='quarantine-box'>", unsafe_allow_html=True)
             st.markdown("**⚡ Surgical Recovery — Live Execution Log:**")
 
-            # Step 1
             st.markdown(
                 f"<span class='step-ok'>✅ Step 1:</span> "
                 f"Agent `{qr['quarantined']}` thread **FROZEN**",
                 unsafe_allow_html=True
             )
 
-            # Step 2
             ckpt_status = "✅ Checkpoint restored" \
                           if qr["checkpoint_used"] \
                           else "⚠️ Safe fallback used (no prior checkpoint)"
@@ -309,14 +263,12 @@ with col2:
                 unsafe_allow_html=True
             )
 
-            # Step 3
             st.markdown(
                 f"<span class='step-ok'>✅ Step 3:</span> "
                 f"Clean clone bootstrapped: `{qr['clone_id']}`",
                 unsafe_allow_html=True
             )
 
-            # Step 4
             resume_status = "✅ Success" \
                             if not qr.get("resume_error") \
                             else f"❌ Error: {qr['resume_error']}"
@@ -335,7 +287,6 @@ with col2:
                 "Clean output delivered to client layer."
             )
 
-            # ── Resume log detail ──
             with st.expander("📋 Agent Resume Log"):
                 for entry in qr.get("resume_log", []):
                     icon = "✅" if entry["status"] == "ok" else "❌"
@@ -359,7 +310,6 @@ with col2:
                 "Zero-trust tracking active."
             )
 
-        # ── Per-agent MSE bar chart (Phase 2 Multi-Perimeter Display) ──
         if agent_results:
             st.markdown("---")
             st.subheader("📊 Per-Agent Security Perimeters")
@@ -368,13 +318,11 @@ with col2:
             scores = [r.get("mse", 0.0) for r in agent_results]
             ceilings = [THRESHOLDS.get(r["role"], 0.015) for r in agent_results]
 
-            # Compile comparative dataframe vectors side-by-side
             chart_df = pd.DataFrame({
                 "Computed Score": scores,
                 "Tolerance Limit": ceilings
             }, index=roles)
 
-            # Streamlit renders multi-column dataframes automatically as grouped bars
             st.bar_chart(chart_df)
             st.caption(
                 "💡 Blue bar = live transaction distortion | "
@@ -382,7 +330,6 @@ with col2:
                 "If Blue exceeds Orange, an automated quarantine fires."
             )
 
-            # ── Detailed metrics table ──
             with st.expander("📋 Full Agent Metrics Table"):
                 display_rows = []
                 for r in agent_results:
@@ -404,9 +351,6 @@ with col2:
                     use_container_width=True
                 )
 
-# ─────────────────────────────────────────────────────────────
-# BOTTOM PANEL — FULL INCIDENT LOG
-# ─────────────────────────────────────────────────────────────
 st.markdown("---")
 st.header("🗂️ Forensic Incident Log")
 
@@ -421,7 +365,7 @@ if os.path.exists(incident_log_path):
             f"⚠️ {len(all_incidents)} incident(s) on record "
             f"across all sessions."
         )
-        for inc in reversed(all_incidents):   # newest first
+        for inc in reversed(all_incidents):
             breach = inc.get("breach_pct", 0)
             icon   = "🔴" if breach > 100 else "🟠"
 
@@ -452,9 +396,6 @@ if os.path.exists(incident_log_path):
 else:
     st.success("✅ No incidents recorded. Incident log will appear here after attacks.")
 
-# ─────────────────────────────────────────────────────────────
-# FOOTER
-# ─────────────────────────────────────────────────────────────
 st.markdown("---")
 st.caption(
     "NeuroSentinel Lite v2.0 — M.Tech Research Prototype | "

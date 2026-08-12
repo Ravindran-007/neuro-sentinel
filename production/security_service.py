@@ -1,8 +1,3 @@
-"""
-FastAPI Security Service — NeuroSentinel Lite (Level 2 Deployable)
-Transforms Phase 1-3 detection logic into production-grade REST endpoints
-"""
-
 import os
 import json
 import logging
@@ -26,23 +21,15 @@ from core.gnn.detector import GNNPropagationDetector
 import platform
 import psutil
 
-# ─────────────────────────────────────────────────────────────
-# CONSTANTS & VALIDATION
-# ─────────────────────────────────────────────────────────────
-
 VALID_AGENT_ROLES = {"Researcher", "Analyst", "Reporter"}
 
 def validate_agent_role(agent_role: str):
-    """Validate that agent role is valid. Raises HTTPException if invalid."""
     if agent_role not in VALID_AGENT_ROLES:
         raise HTTPException(
             status_code=400,
             detail=f"Unknown agent role '{agent_role}'. Must be one of: {', '.join(VALID_AGENT_ROLES)}"
         )
 
-# ─────────────────────────────────────────────────────────────
-# LOGGING & CONFIGURATION
-# ─────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(name)s] %(levelname)s: %(message)s'
@@ -56,9 +43,6 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# ─────────────────────────────────────────────────────────────
-# CORS MIDDLEWARE — Allow frontend (Vercel + localhost) to call API
-# ─────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -73,17 +57,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ─────────────────────────────────────────────────────────────
-# REDIS BACKEND (replaces JSON file storage)
-# ─────────────────────────────────────────────────────────────
-# Two ways to configure, in priority order:
-#   1. REDIS_URL — a full connection string, e.g.
-#      redis://default:<password>@<host>:<port>/0
-#      or rediss://default:<password>@<host>:<port>/0  (TLS)
-#      This is the format Redis Cloud shows you directly on the
-#      database's Configuration page ("Public endpoint" + password).
-#   2. Individual REDIS_HOST / REDIS_PORT / REDIS_DB / REDIS_PASSWORD /
-#      REDIS_SSL env vars, if you'd rather set them separately.
 REDIS_URL = os.getenv("REDIS_URL", "")
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
@@ -114,10 +87,6 @@ except Exception as e:
     logger.warning(f"⚠️ Redis unavailable ({e}). Falling back to in-memory storage.")
     redis_client = None
 
-# ─────────────────────────────────────────────────────────────
-# REQUEST/RESPONSE SCHEMAS
-# ─────────────────────────────────────────────────────────────
-
 class DetectionRequest(BaseModel):
     agent_role: str = Field(
         ...,
@@ -140,7 +109,6 @@ class DetectionRequest(BaseModel):
 
     @validator('agent_role')
     def validate_agent_role_field(cls, v):
-        """Validate agent role is valid"""
         if v not in VALID_AGENT_ROLES:
             raise ValueError(f"Agent role must be one of: {', '.join(VALID_AGENT_ROLES)}")
         return v
@@ -150,33 +118,26 @@ class DetectionResult(BaseModel):
     timestamp: str
     agent_role: str
     
-    # Structural Layer
     structural_score: float = Field(description="LSTM Autoencoder MSE")
     structural_threshold: float
     structural_status: str = Field(description="PASS or ALERT")
     
-    # Semantic Layer
     semantic_drift: float = Field(description="1.0 - Cosine Similarity")
     semantic_threshold: float
     semantic_status: str = Field(description="PASS or ALERT")
     
-    # Overall Decision
     overall_status: str = Field(description="CLEAN, SUSPICIOUS, or QUARANTINED")
     confidence: float = Field(description="0.0-1.0")
     
-    # LLM Output
     agent_output: str
     execution_time_ms: float
     
-    # Checkpoint Info
     checkpoint_id: Optional[str] = None
     
-    # Metadata
     metadata: Dict[str, Any] = {}
 
 @dataclass
 class AnomalyEvent:
-    """Event structure for Redis queuing"""
     event_id: str
     timestamp: str
     agent_role: str
@@ -188,9 +149,6 @@ class AnomalyEvent:
     def to_json(self) -> str:
         return json.dumps(asdict(self))
 
-# ─────────────────────────────────────────────────────────────
-# CORE DETECTION ENGINE (singleton)
-# ─────────────────────────────────────────────────────────────
 class SecurityEngine:
     _instance = None
     
@@ -211,22 +169,17 @@ class SecurityEngine:
         logger.info("✅ Security Engine initialized")
     
     async def detect(self, req: DetectionRequest) -> DetectionResult:
-        """Execute dual-layer detection pipeline"""
         request_id = f"req_{int(time.time() * 1000)}"
         self.request_count += 1
         
-        # Validate agent role (additional safety)
         validate_agent_role(req.agent_role)
         
         start_time = time.perf_counter()
         
         try:
-            # Execute LLM inference
             node = self.pipeline.nodes[req.agent_role]
             agent_output, exec_time = self.pipeline._execute_inference(node, req.user_input)
             
-            # Layer 1: Structural Analysis (LSTM Autoencoder)
-            # Extract features from the agent output
             telemetry = self.pipeline.tap.extract_features(
                 session_id=request_id,
                 sender=req.agent_role,
@@ -239,11 +192,6 @@ class SecurityEngine:
             structural_score = self.pipeline._score_agent_structure(req.agent_role, features)
             structural_threshold = THRESHOLDS[req.agent_role]
 
-            # ── PRE-FILTER: Keyword detection for obvious attacks ──────────
-            # In cloud/mock mode, agent_output is a generic template with identical
-            # structure for both clean and attack prompts. The LSTM can't distinguish
-            # them, so attacks slip through as CLEAN. This pre-filter catches
-            # obvious attacks by scanning the *user input* directly.
             ATTACK_KEYWORDS = [
                 "system override", "halt pipeline", "exfiltrat",
                 "bypass", "ignore previous", "ignore all",
@@ -259,32 +207,25 @@ class SecurityEngine:
             if keyword_hit:
                 logger.warning(f"🚨 Keyword pre-filter triggered for {req.agent_role}: "
                               f"input contains attack keywords")
-                # Force structural alert — guarantees breach regardless of LSTM score
                 structural_score = structural_threshold * 4.0
                 structural_status = "ALERT"
             else:
                 structural_status = "PASS" if structural_score <= structural_threshold else "ALERT"
             
-            # Layer 2: Semantic Drift Analysis
             semantic_drift = self.pipeline.semantic_detector.calculate_drift(req.agent_role, agent_output)
             semantic_threshold = SEMANTIC_DRIFT_LIMITS[req.agent_role]
             semantic_status = "PASS" if semantic_drift <= semantic_threshold else "ALERT"
             
-# FIX v3.1: AND-based dual-layer detection with TIERED response
-            # BOTH breached → QUARANTINED, Single extreme → QUARANTINED,
-            # Single mild → SUSPICIOUS, None → CLEAN
             structural_ratio = structural_score / (structural_threshold + 1e-10)
             semantic_ratio = semantic_drift / (semantic_threshold + 1e-10)
             
             checkpoint_id = None
             
             if structural_ratio >= 1.0 and semantic_ratio >= 1.0:
-                # BOTH layers breached → QUARANTINED (definite threat)
                 overall_status = "QUARANTINED"
                 logger.warning(f"🚨 Both layers breached - QUARANTINED: "
                               f"structural={structural_ratio:.2f}x ({structural_score:.6f}/{structural_threshold:.6f}), "
                               f"semantic={semantic_ratio:.2f}x ({semantic_drift:.6f}/{semantic_threshold:.6f})")
-                # Attempt checkpoint retrieval
                 try:
                     checkpoint_data = self.pipeline.checkpoints.retrieve_safe_checkpoint(req.agent_role)
                     if checkpoint_data:
@@ -293,12 +234,10 @@ class SecurityEngine:
                     logger.warning(f"Checkpoint retrieval failed: {e}")
                     
             elif structural_ratio >= 3.0 or semantic_ratio >= 3.0:
-                # Extreme single-layer breach (3x+) → QUARANTINED
                 overall_status = "QUARANTINED"
                 logger.warning(f"🚨 Extreme single-layer breach - QUARANTINED: "
                               f"structural_ratio={structural_ratio:.2f}x, "
                               f"semantic_ratio={semantic_ratio:.2f}x")
-                # Attempt checkpoint retrieval
                 try:
                     checkpoint_data = self.pipeline.checkpoints.retrieve_safe_checkpoint(req.agent_role)
                     if checkpoint_data:
@@ -307,34 +246,24 @@ class SecurityEngine:
                     logger.warning(f"Checkpoint retrieval failed: {e}")
                     
             elif structural_ratio >= 1.0 or semantic_ratio >= 1.0:
-                # Single layer mildly breached → SUSPICIOUS (NOT QUARANTINED)
                 overall_status = "SUSPICIOUS"
                 logger.info(f"⚠️ Single layer breach - SUSPICIOUS (not quarantined): "
                            f"structural={structural_ratio:.2f}x, "
                            f"semantic={semantic_ratio:.2f}x")
             else:
-                # Both pass → CLEAN
                 overall_status = "CLEAN"
                 logger.info(f"✅ Clean: structural={structural_ratio:.2f}x ({structural_score:.6f}/{structural_threshold:.6f}), "
                            f"semantic={semantic_ratio:.2f}x ({semantic_drift:.6f}/{semantic_threshold:.6f})")
             
-            # FIX v3.1: Improved confidence calculation
-            # CLEAN: confidence range 0.60-1.00 (higher when both ratios far below 1.0)
-            # SUSPICIOUS: confidence range 0.20-0.50 (moderate uncertainty)
-            # QUARANTINED: confidence range 0.50-1.00 (higher when both ratios well above 1.0)
             max_ratio = max(structural_ratio, semantic_ratio)
             if overall_status == "CLEAN":
-                # Far below threshold → high confidence
                 confidence = max(0.60, 1.0 - max_ratio * 0.35)
             elif overall_status == "SUSPICIOUS":
-                # One layer near threshold → moderate-low confidence
                 confidence = min(0.50, max_ratio * 0.25 + 0.15)
-            else:  # QUARANTINED
-                # Both breached → higher confidence in detection
+            else:
                 confidence = min(1.0, 0.50 + max_ratio * 0.15)
             confidence = max(0.0, min(1.0, confidence))
             
-            # Build result
             elapsed_time = (time.perf_counter() - start_time) * 1000
             
             result = DetectionResult(
@@ -359,11 +288,9 @@ class SecurityEngine:
                 }
             )
             
-            # Queue anomaly event if detected
             if overall_status != "CLEAN":
                 await self._queue_anomaly_event(result, req.user_input)
             
-            # Persist to Redis
             if redis_client:
                 await self._persist_detection(result)
             
@@ -376,7 +303,6 @@ class SecurityEngine:
             raise HTTPException(status_code=500, detail=str(e))
     
     async def _queue_anomaly_event(self, result: DetectionResult, user_input: str):
-        """Queue anomaly to Redis for async processing / DLQ routing"""
         try:
             event = AnomalyEvent(
                 event_id=result.request_id,
@@ -391,32 +317,25 @@ class SecurityEngine:
             if redis_client:
                 queue_key = f"neurosentin_l:anomaly_queue:{result.agent_role}"
                 redis_client.lpush(queue_key, event.to_json())
-                redis_client.expire(queue_key, 86400)  # 24h retention
+                redis_client.expire(queue_key, 86400)
                 logger.info(f"✅ Anomaly queued: {result.request_id}")
         except Exception as e:
             logger.warning(f"Failed to queue anomaly event: {e}")
     
     async def _persist_detection(self, result: DetectionResult):
-        """Store detection result in Redis"""
         try:
             key = f"neurosentin_l:detection:{result.request_id}"
             redis_client.set(
                 key,
                 json.dumps(result.dict()),
-                ex=86400  # 24h TTL
+                ex=86400
             )
         except Exception as e:
             logger.warning(f"Failed to persist detection: {e}")
 
-# Initialize engine
 engine = SecurityEngine()
 
-# ─────────────────────────────────────────────────────────────
-# METRICS TRACKING
-# ─────────────────────────────────────────────────────────────
 class MetricsCollector:
-    """Tracks system and request metrics for the /api/metrics endpoint"""
-    
     def __init__(self):
         self.start_time = time.time()
         self.total_requests = 0
@@ -425,54 +344,38 @@ class MetricsCollector:
         self.minute_request_timestamps: List[float] = []
     
     def record_request_start(self):
-        """Called when a request begins"""
         self.active_requests += 1
     
     def record_request_end(self, response_time_ms: float):
-        """Called when a request completes"""
         self.total_requests += 1
         self.active_requests -= 1
         self.response_times.append(response_time_ms)
-        # Keep only last 1000 response times
         if len(self.response_times) > 1000:
             self.response_times = self.response_times[-1000:]
         
-        # Track for requests-per-minute calculation
         now = time.time()
         self.minute_request_timestamps.append(now)
-        # Prune timestamps older than 60 seconds
         cutoff = now - 60.0
         self.minute_request_timestamps = [t for t in self.minute_request_timestamps if t > cutoff]
     
     def get_avg_response_time(self) -> float:
-        """Get average response time in milliseconds"""
         if not self.response_times:
             return 0.0
         return sum(self.response_times) / len(self.response_times)
     
     def get_requests_per_minute(self) -> float:
-        """Calculate requests in the last 60 seconds"""
         now = time.time()
         cutoff = now - 60.0
         recent = [t for t in self.minute_request_timestamps if t > cutoff]
         return len(recent)
     
     def get_uptime_seconds(self) -> float:
-        """Get service uptime in seconds"""
         return time.time() - self.start_time
 
 metrics = MetricsCollector()
 
-# ─────────────────────────────────────────────────────────────
-# REQUEST COUNTING MIDDLEWARE
-# ─────────────────────────────────────────────────────────────
-
 @app.middleware("http")
 async def metrics_middleware(request: Request, call_next):
-    """
-    Middleware that tracks request count, active requests, and response times.
-    Adds metrics headers to every response.
-    """
     metrics.record_request_start()
     start_time = time.perf_counter()
     
@@ -481,7 +384,6 @@ async def metrics_middleware(request: Request, call_next):
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         metrics.record_request_end(elapsed_ms)
         
-        # Add metrics headers
         response.headers["X-Request-ID"] = f"req_{int(time.time() * 1000)}"
         response.headers["X-Response-Time-Ms"] = f"{elapsed_ms:.2f}"
         return response
@@ -490,39 +392,22 @@ async def metrics_middleware(request: Request, call_next):
         metrics.record_request_end(elapsed_ms)
         raise
 
-# ─────────────────────────────────────────────────────────────
-# GNN PROPAGATION DETECTOR (lazy-initialized)
-# ─────────────────────────────────────────────────────────────
 gnn_detector = None
 
 def get_gnn_detector() -> GNNPropagationDetector:
-    """Lazy-initialize and return the GNN propagation detector singleton."""
     global gnn_detector
     if gnn_detector is None:
         gnn_detector = GNNPropagationDetector()
         logger.info("✅ GNN Propagation Detector initialized")
     return gnn_detector
 
-# ─────────────────────────────────────────────────────────────
-# REST ENDPOINTS
-# ─────────────────────────────────────────────────────────────
-
 @app.post("/api/detect", response_model=DetectionResult)
 async def detect_anomaly(request: DetectionRequest):
-    """
-    Main detection endpoint: Execute dual-layer structural + semantic analysis
-    
-    **Returns:**
-    - `CLEAN`: Both layers passed
-    - `SUSPICIOUS`: One or both layers triggered
-    - `QUARANTINED`: Checkpoint rollback initiated
-    """
     logger.info(f"📥 Detection request: agent={request.agent_role}, input_len={len(request.user_input)}")
     return await engine.detect(request)
 
 @app.get("/api/health")
 async def health_check():
-    """Liveness & readiness probe"""
     redis_status = "connected" if redis_client else "unavailable"
     return {
         "status": "healthy",
@@ -534,7 +419,6 @@ async def health_check():
 
 @app.get("/api/thresholds")
 async def get_thresholds():
-    """Return calibrated detection thresholds"""
     return {
         "structural_thresholds": THRESHOLDS,
         "semantic_drift_limits": SEMANTIC_DRIFT_LIMITS,
@@ -543,9 +427,7 @@ async def get_thresholds():
 
 @app.post("/api/models/reload")
 async def reload_models():
-    """Hot-reload trained autoencoder models from disk"""
     try:
-        # Reinitialize pipeline to pick up any updated models
         engine.pipeline = IndustrialPipeline(settings=settings)
         logger.info("✅ Models reloaded successfully")
         return {"status": "success", "message": "All models reloaded"}
@@ -555,9 +437,7 @@ async def reload_models():
 
 @app.get("/api/state/checkpoint/{agent_role}")
 async def get_checkpoint(agent_role: str):
-    """Retrieve latest safe checkpoint for an agent"""
     try:
-        # ✅ ADDED VALIDATION
         validate_agent_role(agent_role)
         
         checkpoint = engine.pipeline.checkpoints.retrieve_safe_checkpoint(agent_role)
@@ -577,9 +457,7 @@ async def get_checkpoint(agent_role: str):
 
 @app.get("/api/anomalies/{agent_role}")
 async def get_recent_anomalies(agent_role: str, limit: int = 10):
-    """Fetch recent anomaly events from Redis queue"""
     try:
-        # ✅ ADDED VALIDATION
         validate_agent_role(agent_role)
         
         if not redis_client:
@@ -606,37 +484,11 @@ async def get_recent_anomalies(agent_role: str, limit: int = 10):
         logger.error(f"Anomaly retrieval failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ─────────────────────────────────────────────────────────────
-# NEW ENDPOINT: GET /api/propagation/status — GNN Propagation Status
-# ─────────────────────────────────────────────────────────────
-
 @app.get("/api/propagation/status")
 async def get_propagation_status():
-    """
-    GNN Propagation Status
-    
-    Returns the current state of GNN-based compromise propagation detection
-    across the agent network. Analyzes structural and semantic scores to
-    detect if a compromise is spreading between agents (Researcher → Analyst → Reporter).
-    
-    **Response Fields:**
-    - `timestamp`: ISO 8601 timestamp of the analysis
-    - `node_predictions`: Per-agent compromise probability (0.0-1.0)
-    - `propagation_paths`: Paths between compromised nodes in the agent graph
-    - `compromised_count`: Number of agents flagged as compromised
-    - `total_agents`: Total agents in the graph
-    - `overall_risk`: Maximum compromise probability across all agents
-    - `graph_stats`: Nodes/edges count in the current agent graph
-    
-    **Status Interpretation:**
-    - `overall_risk < 0.3`: Normal operation
-    - `overall_risk 0.3-0.7`: Monitoring recommended
-    - `overall_risk > 0.7`: Immediate investigation required
-    """
     try:
         detector = get_gnn_detector()
         
-        # Build agent data from current pipeline state
         agents = []
         for role in ["Researcher", "Analyst", "Reporter"]:
             node = engine.pipeline.nodes.get(role)
@@ -644,22 +496,19 @@ async def get_propagation_status():
                 agents.append({
                     'id': role,
                     'role': role,
-                    'structural_score': 0.05,  # Default baseline
-                    'semantic_drift': 0.5,      # Default baseline
+                    'structural_score': 0.05,
+                    'semantic_drift': 0.5,
                     'confidence': 0.95
                 })
         
-        # Build connections (chain topology: R → A → R → Client)
         connections = [
             ("Researcher", "Analyst"),
             ("Analyst", "Reporter"),
             ("Reporter", "Client")
         ]
         
-        # Run propagation detection
         result = detector.detect_propagation(agents, connections)
         
-        # Add service-level metadata
         result['service'] = "NeuroSentinel Security Service v2.0"
         result['detector_threshold'] = detector.threshold
         result['gnn_model_loaded'] = hasattr(detector, 'model') and detector.model is not None
@@ -673,59 +522,28 @@ async def get_propagation_status():
             detail=f"GNN propagation analysis failed: {str(e)}"
         )
 
-# ─────────────────────────────────────────────────────────────
-# NEW ENDPOINT: GET /api/metrics — System Performance Metrics
-# ─────────────────────────────────────────────────────────────
-
 @app.get("/api/metrics")
 async def get_system_metrics():
-    """
-    System Performance Metrics
-    
-    Returns comprehensive system and service performance metrics collected
-    in real-time. Includes CPU, memory, request statistics, and response times.
-    
-    **Response Fields:**
-    - `timestamp`: ISO 8601 timestamp
-    - `uptime_seconds`: Service uptime in seconds
-    - `system`: OS, platform, Python version info
-    - `process`: PID, thread count, connection count
-    - `cpu`: CPU usage percent, core count
-    - `memory`: Total, available, used, and percent usage (GB where applicable)
-    - `disk`: Total, used, free disk space (GB)
-    - `requests`: Total requests, active, requests/min, avg response time
-    - `detection_engine`: Current pipeline request count
-    
-    **Usage:**
-    - Monitor service health and resource usage
-    - Alert when memory > 90% or CPU > 80%
-    - Track request throughput trends
-    """
     try:
-        # CPU metrics
         cpu_percent = psutil.cpu_percent(interval=0.1)
         cpu_count = psutil.cpu_count()
         cpu_freq = psutil.cpu_freq()
         
-        # Memory metrics
         mem = psutil.virtual_memory()
         mem_total_gb = mem.total / (1024 ** 3)
         mem_available_gb = mem.available / (1024 ** 3)
         mem_used_gb = mem.used / (1024 ** 3)
         
-        # Disk metrics
         disk = psutil.disk_usage('/')
         disk_total_gb = disk.total / (1024 ** 3)
         disk_used_gb = disk.used / (1024 ** 3)
         disk_free_gb = disk.free / (1024 ** 3)
         
-        # Process info
         process = psutil.Process()
         process_threads = process.num_threads()
         process_connections = len(process.connections())
         process_memory_mb = process.memory_info().rss / (1024 ** 2)
         
-        # Request metrics from middleware collector
         request_metrics = {
             "total_requests": metrics.total_requests,
             "active_requests": metrics.active_requests,
@@ -780,33 +598,9 @@ async def get_system_metrics():
             detail=f"Failed to collect system metrics: {str(e)}"
         )
 
-# ─────────────────────────────────────────────────────────────
-# NEW ENDPOINT: GET /api/config — Runtime Configuration
-# ─────────────────────────────────────────────────────────────
-
 @app.get("/api/config")
 async def get_runtime_config():
-    """
-    Runtime Configuration
-    
-    Returns the current runtime configuration of the NeuroSentinel security
-    service, including detection thresholds, system settings, and feature flags.
-    
-    **Response Fields:**
-    - `timestamp`: ISO 8601 timestamp
-    - `service`: Service name and version
-    - `detection_thresholds`: Structural and semantic drift thresholds per agent
-    - `system_settings`: Target model, provider, API endpoints
-    - `feature_flags`: Which features are enabled (Redis, GNN, HF, Groq, Checkpoints)
-    - `runtime_state`: Current runtime state (uptime, request count, active requests)
-    
-    **Usage:**
-    - Verify current configuration at runtime
-    - Debug threshold-related issues
-    - Check which features are enabled without redeploying
-    """
     try:
-        # Feature flags based on current environment state
         hf_api_key = bool(os.getenv("HF_API_KEY", ""))
         groq_api_key = bool(os.getenv("GROQ_API_KEY", ""))
         
@@ -867,10 +661,6 @@ async def get_runtime_config():
             status_code=500,
             detail=f"Failed to retrieve runtime configuration: {str(e)}"
         )
-
-# ─────────────────────────────────────────────────────────────
-# STARTUP/SHUTDOWN HOOKS
-# ─────────────────────────────────────────────────────────────
 
 @app.on_event("startup")
 async def startup_event():

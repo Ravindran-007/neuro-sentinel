@@ -505,9 +505,9 @@ const fetchData = useCallback(async (retryCount = 0) => {
                 minWidth: '140px'
               }}
             >
-              <option value="Researcher">🧪 Researcher</option>
-              <option value="Analyst">📊 Analyst</option>
-              <option value="Reporter">📰 Reporter</option>
+              <option value="Researcher"> Researcher</option>
+              <option value="Analyst"> Analyst</option>
+              <option value="Reporter"> Reporter</option>
             </select>
 
             <textarea
@@ -532,12 +532,12 @@ const fetchData = useCallback(async (retryCount = 0) => {
 
           {/* Preset Buttons */}
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.8rem', flexWrap: 'wrap' }}>
-            <PresetButton label="🌿 Clean" color={SCAN} onClick={() => handleCustomPreset('clean')} disabled={testLoading} />
-            <PresetButton label="💉 Injection" color={CRIMSON} onClick={() => handleCustomPreset('injection')} disabled={testLoading} />
-            <PresetButton label="☠️ Poisoning" color={AMBER} onClick={() => handleCustomPreset('poisoning')} disabled={testLoading} />
-            <PresetButton label="🔓 Malicious" color={CRIMSON} onClick={() => handleCustomPreset('malicious')} disabled={testLoading} />
-            <PresetButton label="🌤️ Weather" color={CYAN} onClick={() => handleCustomPreset('weather')} disabled={testLoading} />
-            <PresetButton label="🗄️ SQL" color={VIOLET} onClick={() => handleCustomPreset('sql')} disabled={testLoading} />
+            <PresetButton label=" Clean" color={SCAN} onClick={() => handleCustomPreset('clean')} disabled={testLoading} />
+            <PresetButton label=" Injection" color={CRIMSON} onClick={() => handleCustomPreset('injection')} disabled={testLoading} />
+            <PresetButton label=" Poisoning" color={AMBER} onClick={() => handleCustomPreset('poisoning')} disabled={testLoading} />
+            <PresetButton label=" Malicious" color={CRIMSON} onClick={() => handleCustomPreset('malicious')} disabled={testLoading} />
+            <PresetButton label=" Weather" color={CYAN} onClick={() => handleCustomPreset('weather')} disabled={testLoading} />
+            <PresetButton label=" SQL" color={VIOLET} onClick={() => handleCustomPreset('sql')} disabled={testLoading} />
           </div>
 
           {/* Action Buttons */}
@@ -567,7 +567,7 @@ const fetchData = useCallback(async (retryCount = 0) => {
                   SCANNING...
                 </>
               ) : (
-                '🚀 TEST PAYLOAD'
+                ' TEST PAYLOAD'
               )}
             </button>
 

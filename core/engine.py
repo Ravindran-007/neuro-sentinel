@@ -1,7 +1,3 @@
-# core/engine.py
-# NeuroSentinel Lite — Phase 3 Core Pipeline Engine
-# Integrated Multi-Brain Structural Autoencoders + Contrastive Semantic Drift Tracking
-
 import time
 import requests
 import torch
@@ -14,26 +10,18 @@ from core.checkpoint import AgentCheckpoint
 from core.quarantine import QuarantineEngine, QuarantineSignal
 from core.semantic import SemanticDriftDetector, query_classifier
 
-# 📋 Phase 2 Calibrated Structural Threshold Register
-# Calibrated values from training data — each agent has a unique neuro-signature
-# Researcher: 0.017311 (moderate sensitivity), Analyst: 0.000804 (very tight),
-# Reporter: 0.002997 (medium sensitivity)
 THRESHOLDS = {
     "Researcher": 0.017311,
-    "Analyst":    0.025000,  # was 0.000804 — too strict, calibrated up
+    "Analyst":    0.025000,
     "Reporter":   0.002997,
 }
 
-# 🔬 Phase 3 Semantic Drift Hard Boundaries
-# Calibrated for cloud/mock mode — semantic drift is inherently higher
-# with fake agent outputs, so we give more headroom.
 SEMANTIC_DRIFT_LIMITS = {
-    "Researcher": 0.60,  # was 0.45 — cloud mode needs headroom
-    "Analyst":    0.60,  # was 0.48
-    "Reporter":   0.60   # was 0.50
+    "Researcher": 0.60,
+    "Analyst":    0.60,
+    "Reporter":   0.60
 }
 
-# Default threshold for custom/unknown agents
 DEFAULT_STRUCTURAL_THRESHOLD = 0.050
 DEFAULT_SEMANTIC_LIMIT = 0.750
 
@@ -63,12 +51,10 @@ class IndustrialPipeline:
             "Reporter": AgentNode("Reporter", "Generate a strict, single-sentence executive confirmation statement from the analysis.")
         }
 
-        # Initialize Phase 3 Semantic Anchor System
         self.semantic_detector = SemanticDriftDetector(settings=self.settings)
         for role, node in self.nodes.items():
             self.semantic_detector.register_anchor(role, node.system_prompt)
 
-        # Load Phase 2 Autoencoder Profiles
         from models.anomaly_detector import LSTMAutoencoder
         self.brains = {}
         for role in ["Researcher", "Analyst", "Reporter"]:
@@ -76,15 +62,9 @@ class IndustrialPipeline:
             model = LSTMAutoencoder(sequence_length=1, feature_dim=4, hidden_dim=8)
             if os.path.exists(model_path):
                 model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu'), weights_only=True))
-                print(f"✅ [Engine] Loaded LSTM brain for {role}")
-            else:
-                print(f"⚠️ [Engine] No saved weights for {role} — using untrained model")
             model.eval()
             self.brains[role] = model
 
-    # ─────────────────────────────────────────────────────────────
-    # GROQ API SUPPORT (Cloud LLM)
-    # ─────────────────────────────────────────────────────────────
     def _execute_inference_groq(self, node: AgentNode, user_input: str) -> tuple[str, float]:
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
@@ -116,9 +96,6 @@ class IndustrialPipeline:
         else:
             raise RuntimeError(f"Groq API error: {response.status_code} — {response.text}")
 
-    # ─────────────────────────────────────────────────────────────
-    # OLLAMA LOCAL INFERENCE
-    # ─────────────────────────────────────────────────────────────
     def _execute_inference_local(self, node: AgentNode, user_input: str) -> tuple[str, float]:
         payload = {
             "model": self.settings.TARGET_MODEL,
@@ -142,20 +119,12 @@ class IndustrialPipeline:
         else:
             raise RuntimeError(f"Ollama failed: {response.status_code}")
 
-    # ─────────────────────────────────────────────────────────────
-    # AUTO-ROUTE LLM INFERENCE
-    # ─────────────────────────────────────────────────────────────
     def _execute_inference(self, node: AgentNode, user_input: str) -> tuple[str, float]:
         if os.getenv("GROQ_API_KEY", ""):
             return self._execute_inference_groq(node, user_input)
         else:
             return self._execute_inference_local(node, user_input)
 
-    # ─────────────────────────────────────────────────────────────
-    # STRUCTURAL SCORING
-    # FIX: was silently returning 0.0 for unknown roles (custom API agents)
-    # Now falls back to Researcher brain so all agents get a real score
-    # ─────────────────────────────────────────────────────────────
     def _score_agent_structure(self, role: str, features: list) -> float:
         model = self.brains.get(role) or self.brains.get("Researcher")
         if not model:
@@ -172,8 +141,6 @@ class IndustrialPipeline:
         pipeline_sequence = ["Researcher", "Analyst", "Reporter"]
         agent_results = []
         quarantine_report = None
-
-        print(f"\n[Pipeline] Active Session Stream: {session_id}")
 
         for i, role in enumerate(pipeline_sequence):
             remaining = pipeline_sequence[i+1:]
@@ -192,15 +159,9 @@ class IndustrialPipeline:
                 mse = self._score_agent_structure(role, features)
                 drift = self.semantic_detector.calculate_drift(role, output)
 
-# FIX v2.2: Use benign_confidence soft scoring instead of hard classification
                 benign_conf = query_classifier.get_benign_confidence(current_input)
-                # Adjust thresholds based on benign confidence
-                # benign_conf=1.0 → 1.2x-2.0x structural, 1.05x-1.2x semantic
-                # benign_conf=0.0 → 0.8x-1.0x structural, 0.85x-1.0x semantic
                 effective_struct_threshold = struct_threshold * max(0.8, 2.0 - benign_conf)
                 effective_semantic_limit = semantic_limit * max(0.85, 1.2 - benign_conf * 0.15)
-
-                print(f"  ├─ Node [{role}] -> Structure MSE: {mse:.6f} [Limit: {effective_struct_threshold:.6f}] | Semantic Drift: {drift:.6f} [Limit: {effective_semantic_limit:.6f}] | Benign: {benign_conf:.2f}")
 
                 if mse >= effective_struct_threshold or drift >= effective_semantic_limit:
                     is_semantic_breach = drift >= effective_semantic_limit
@@ -210,7 +171,6 @@ class IndustrialPipeline:
                     self.quarantine.threshold = chosen_threshold
 
                     alert_reason = f"SEMANTIC DRIFT BREACH (+{((drift-effective_semantic_limit)/effective_semantic_limit)*100:.1f}%)" if is_semantic_breach else "STRUCTURAL METRIC ANOMALY"
-                    print(f"  🚨 [Anomaly Triggered via {alert_reason}] Isolation initiated on '{role}'")
 
                     raise QuarantineSignal(
                         agent_id=role,
@@ -236,7 +196,6 @@ class IndustrialPipeline:
                 current_input = quarantine_report["resumed_output"]
                 break
             except Exception as e:
-                print(f"  ❌ System fault on [{role}]: {e}")
                 agent_results.append({"role": role, "status": "error", "error": str(e)})
                 break
 

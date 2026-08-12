@@ -1,7 +1,4 @@
-﻿# core/gnn/detector.py
-# GNN Detector for compromise propagation
-
-import os
+﻿import os
 import torch
 import logging
 from typing import Dict, List, Tuple, Optional, Any
@@ -15,10 +12,6 @@ logger = logging.getLogger("NeuroSentinel-GNN")
 
 
 class GNNPropagationDetector:
-    """
-    Main engine for GNN-based compromise propagation detection.
-    """
-    
     def __init__(
         self,
         model_path: Optional[str] = None,
@@ -28,12 +21,11 @@ class GNNPropagationDetector:
         self.device = torch.device(device)
         self.threshold = threshold
         
-        # ✅ FIXED: Use production model architecture (128 hidden, 4 layers)
         self.model = CompromisePropagationGNN(
             in_channels=4,
-            hidden_channels=128,  # ← Production model size
+            hidden_channels=128,
             out_channels=2,
-            num_layers=4          # ← Production model size
+            num_layers=4
         )
         
         self.graph_builder = AgentGraphBuilder()
@@ -52,8 +44,6 @@ class GNNPropagationDetector:
         agents: List[Dict],
         connections: List[Tuple[str, str]]
     ) -> Dict[str, Any]:
-        """Detect compromise propagation across the agent network."""
-        # Build graph
         for agent in agents:
             self.graph_builder.add_agent(
                 agent['id'],
@@ -68,7 +58,6 @@ class GNNPropagationDetector:
         for a, b in connections:
             self.graph_builder.add_connection(a, b)
         
-        # Run inference
         data = self.graph_builder.to_pyg_data().to(self.device)
         
         with torch.no_grad():
@@ -77,7 +66,6 @@ class GNNPropagationDetector:
         probabilities = torch.exp(result['predictions'])
         nodes = list(self.graph_builder.graph.nodes())
         
-        # Build node predictions
         node_predictions = {}
         for i, node in enumerate(nodes):
             prob = float(probabilities[i, 1])
@@ -87,7 +75,6 @@ class GNNPropagationDetector:
                 'propagation_score': float(result['propagation_score'][i])
             }
         
-        # Detect propagation paths
         paths = self._find_propagation_paths(node_predictions)
         
         return {
@@ -104,7 +91,6 @@ class GNNPropagationDetector:
         }
     
     def _find_propagation_paths(self, predictions: Dict) -> List:
-        """Find propagation paths between compromised nodes."""
         compromised = [n for n, p in predictions.items() if p['status'] == 'COMPROMISED']
         
         if len(compromised) < 2:
@@ -129,11 +115,9 @@ class GNNPropagationDetector:
         return paths
     
     def reset_graph(self):
-        """Reset the graph builder."""
         self.graph_builder = AgentGraphBuilder()
     
     def get_graph_data(self) -> Dict:
-        """Get current graph data for visualization."""
         graph = self.graph_builder.graph
         nodes = list(graph.nodes(data=True))
         edges = list(graph.edges(data=True))
