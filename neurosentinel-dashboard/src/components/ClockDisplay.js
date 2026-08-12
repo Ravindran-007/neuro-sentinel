@@ -1,4 +1,3 @@
-// ClockDisplay — Lightweight memoized clock to prevent full dashboard re-renders
 import React, { useState, useEffect } from 'react';
 
 const MUTE_TEXT = '#5C7290';
@@ -21,4 +20,3 @@ const ClockDisplay = React.memo(() => {
 
 ClockDisplay.displayName = 'ClockDisplay';
 export default ClockDisplay;
-

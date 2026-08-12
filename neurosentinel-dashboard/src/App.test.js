@@ -2,10 +2,8 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import App from './App';
 import axios from 'axios';
 
-// Mock axios before all tests
 jest.mock('axios');
 
-// Mock data
 const mockHealthData = {
   uptime_requests: 1250,
   redis: 'connected',
@@ -39,7 +37,6 @@ describe('NeuroSentinel Dashboard', () => {
     axios.get.mockClear();
     axios.post.mockClear();
     
-    // Setup default mock implementations
     axios.get.mockImplementation((url) => {
       if (url.includes('/api/health')) {
         return Promise.resolve({ data: mockHealthData });
@@ -57,7 +54,6 @@ describe('NeuroSentinel Dashboard', () => {
     await act(async () => {
       render(<App />);
     });
-    // Use getAllByText to handle multiple matches (header and footer)
     const elements = screen.getAllByText(/NEUROSENTINEL/i);
     expect(elements.length).toBeGreaterThan(0);
   });
@@ -66,7 +62,6 @@ describe('NeuroSentinel Dashboard', () => {
     await act(async () => {
       render(<App />);
     });
-    // After loading completes, we should see the main content
     await waitFor(() => {
       expect(screen.getByText(/System State/i)).toBeInTheDocument();
     });
@@ -86,7 +81,6 @@ describe('NeuroSentinel Dashboard', () => {
       render(<App />);
     });
     await waitFor(() => {
-      // Use getAllByText to handle multiple matches (SVG text, panel header, dropdown)
       expect(screen.getAllByText(/Researcher/i).length).toBeGreaterThan(0);
       expect(screen.getAllByText(/Analyst/i).length).toBeGreaterThan(0);
       expect(screen.getAllByText(/Reporter/i).length).toBeGreaterThan(0);
@@ -107,7 +101,6 @@ describe('NeuroSentinel Dashboard', () => {
       render(<App />);
     });
     await waitFor(() => {
-      // There are two select elements (Live Threat Simulation + Custom Payload Test)
       const selects = screen.getAllByRole('combobox');
       expect(selects.length).toBeGreaterThanOrEqual(2);
     });

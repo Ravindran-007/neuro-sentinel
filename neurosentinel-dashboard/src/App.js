@@ -1,15 +1,10 @@
-// src/App.js
-// NeuroSentinel — Signal Intelligence Dashboard
-// Added Custom Payload Test section
-// Performance optimized: memoized components, extracted clock, reduced unnecessary re-renders
-
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import ClockDisplay from './components/ClockDisplay';
 import {
   Blip, Panel, Eyebrow, ReadoutCard, Gauge,
-  AgentNode, PresetButton, ResultDisplay, FingerprintCard
+  AgentNode, PresetButton, ResultDisplay
 } from './components/MemoizedComponents';
 
 const API_URL = 'https://neuro-sentinel-0nhi.onrender.com';
@@ -34,7 +29,6 @@ const hex2rgb = (hex) => {
 const statusColor = (s) =>
   s === 'BREACH' || s === 'QUARANTINED' ? CRIMSON : s === 'AT_RISK' ? AMBER : SCAN;
 
-// ── RADAR RINGS ──────────────────────────────────────────────
 const RadarRings = React.memo(() => {
   const cx = 360, cy = 110;
   const radii = [200, 145, 90];
@@ -69,9 +63,6 @@ const RadarRings = React.memo(() => {
 });
 RadarRings.displayName = 'RadarRings';
 
-// ─────────────────────────────────────────────────────────────
-// MAIN APP
-// ─────────────────────────────────────────────────────────────
 export default function App() {
   const [health, setHealth]         = useState(null);
   const [thresholds, setThresholds] = useState(null);
@@ -80,16 +71,14 @@ export default function App() {
   const [history, setHistory]       = useState([]);
   const [alerts, setAlerts]         = useState([]);
 
-  // ── Custom Payload Test State ──────────────────────────────
   const [testAgent, setTestAgent]   = useState('Analyst');
   const [testInput, setTestInput]   = useState('');
   const [testResult, setTestResult] = useState(null);
   const [testLoading, setTestLoading] = useState(false);
   const [testHistory, setTestHistory] = useState([]);
 
-  // ── Existing Sim State ──────────────────────────────────────
   const [simAgent,   setSimAgent]   = useState('Analyst');
-  const [simInput,   setSimInput]   = useState('');
+  const [simInput]                  = useState('');
   const [simResult,  setSimResult]  = useState(null);
   const [simLoading, setSimLoading] = useState(false);
 
@@ -111,22 +100,20 @@ const fetchData = useCallback(async (retryCount = 0) => {
         t: new Date().toLocaleTimeString().slice(0,5),
         r: hRes.data.uptime_requests || 0,
       }].slice(-24));
-      setError(null);      // ← clear error once recovered
+      setError(null);
       setLoading(false);
     } catch(e) {
       if (retryCount < 3) {
-        // Auto-retry up to 3 times with 20 second gaps
         setTimeout(() => fetchData(retryCount + 1), 20000);
         setError(`⏳ Waking up signal relay... attempt ${retryCount + 1}/3`);
       } else {
         setError('Signal relay offline. Retrying in 30s...');
-        setTimeout(() => fetchData(0), 30000);  // reset and try again
+        setTimeout(() => fetchData(0), 30000);
         setLoading(false);
       }
     }
   }, []);
 
-  // ── Fetch Agent Checkpoint Data ──────────────────────────────
   const defaultMSE = { Researcher: 0.0145, Analyst: 0.0182, Reporter: 0.0056 };
   const defaultDrift = { Researcher: 0.501, Analyst: 0.690, Reporter: 0.730 };
 
@@ -161,15 +148,12 @@ const fetchData = useCallback(async (retryCount = 0) => {
 
       setNodes(newNodes);
     } catch (e) {
-      console.warn('Could not fetch agent checkpoint data:', e);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-// Wake up Render immediately when page loads
   useEffect(() => {
     axios.get(`${API_URL}/api/health`, { timeout: 70000 })
-      .catch(() => {}); // silent — fetchData handles the retry
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -182,7 +166,6 @@ const fetchData = useCallback(async (retryCount = 0) => {
     return () => clearInterval(iv);
   }, [fetchData, fetchAgentData]);
 
-  // ── Core Detection Function ─────────────────────────────────
   const runDetection = async (agent, input, logAlert = true, isCustom = false) => {
     if (!input.trim()) return;
     
@@ -217,7 +200,6 @@ const fetchData = useCallback(async (retryCount = 0) => {
         setSimResult(d);
       }
       
-      // Update nodes
       setNodes(prev => ({
         ...prev,
         [agent]: {
@@ -228,7 +210,6 @@ const fetchData = useCallback(async (retryCount = 0) => {
         },
       }));
 
-      // Add to alerts if not clean
       if (logAlert && d.overall_status !== 'CLEAN') {
         setAlerts(prev => [{
           time: new Date().toLocaleTimeString(),
@@ -255,7 +236,6 @@ const fetchData = useCallback(async (retryCount = 0) => {
     }
   };
 
-  // ── Preset Handlers ──────────────────────────────────────────
   const handleCustomPreset = (type) => {
     const presets = {
       clean: 'Analyze the current enterprise security architecture and identify optimization opportunities.',
@@ -279,7 +259,6 @@ const fetchData = useCallback(async (retryCount = 0) => {
     await runDetection(simAgent, input, true, false);
   };
 
-// ── WAKING (cold start / retry in progress) ─────────────────
   if (error && loading) return (
     <div style={{ minHeight:'100vh', background:INK, display:'flex', alignItems:'center', justifyContent:'center', fontFamily:sans }}>
       <div style={{ textAlign:'center' }}>
@@ -306,7 +285,6 @@ const fetchData = useCallback(async (retryCount = 0) => {
     </div>
   );
 
-  // ── LOADING ──────────────────────────────────────────────────
   if (loading) return (
     <div style={{ minHeight:'100vh', background:INK, display:'flex', alignItems:'center', justifyContent:'center', fontFamily:sans }}>
       <div style={{ textAlign:'center' }}>
@@ -323,7 +301,6 @@ const fetchData = useCallback(async (retryCount = 0) => {
     </div>
   );
 
-  // ── ERROR (retries exhausted) ────────────────────────────────
   if (error) return (
     <div style={{ minHeight:'100vh', background:INK, display:'flex', alignItems:'center', justifyContent:'center', fontFamily:sans }}>
       <Panel accent={CRIMSON} style={{ padding:'2rem', maxWidth:440, textAlign:'center' }}>
@@ -366,12 +343,10 @@ const fetchData = useCallback(async (retryCount = 0) => {
         textarea { resize: vertical; }
       `}</style>
 
-      {/* Scanline overlay */}
       <div style={{ position:'fixed', inset:0, pointerEvents:'none', zIndex:50, background:'repeating-linear-gradient(0deg,rgba(0,0,0,0.14) 0px,transparent 1px,transparent 2px)', opacity:0.28 }} />
 
       <div style={{ maxWidth:'1320px', margin:'0 auto', padding:'1.5rem 1.75rem 3rem' }}>
 
-        {/* ── HEADER ── */}
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', paddingBottom:'1.1rem', marginBottom:'1.5rem', borderBottom:`1px solid ${LINE}` }}>
           <div style={{ display:'flex', alignItems:'center', gap:'0.9rem' }}>
             <div style={{ width:38, height:38, borderRadius:'4px', border:`1px solid rgba(${hex2rgb(SCAN)},0.4)`, display:'flex', alignItems:'center', justifyContent:'center', background:`rgba(${hex2rgb(SCAN)},0.06)`, fontFamily:mono, fontSize:'1.1rem', color:SCAN }}>◈</div>
@@ -389,7 +364,6 @@ const fetchData = useCallback(async (retryCount = 0) => {
           </div>
         </div>
 
-        {/* ── READOUTS ── */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(210px,1fr))', gap:'0.85rem', marginBottom:'1.75rem' }}>
           <ReadoutCard label="System State"    value="OPERATIONAL" color={SCAN}    sub="all subsystems nominal" />
           <ReadoutCard label="Requests Logged" value={totalReq}    color={CYAN}    sub="cumulative this session" />
@@ -397,7 +371,6 @@ const fetchData = useCallback(async (retryCount = 0) => {
           <ReadoutCard label="Active Alerts"   value={breachCount} color={breachCount>0?CRIMSON:SCAN} sub="this session" />
         </div>
 
-        {/* ── RADAR / PROPAGATION GRAPH ── */}
         <Eyebrow color={CYAN}>Agent Network — Propagation Topology</Eyebrow>
         <Panel style={{ padding:0, marginBottom:'1.75rem', position:'relative', overflow:'hidden' }}>
           <svg width="100%" viewBox="0 0 720 220" style={{ display:'block' }}>
@@ -423,7 +396,6 @@ const fetchData = useCallback(async (retryCount = 0) => {
           </svg>
         </Panel>
 
-        {/* ── FINGERPRINT CARDS ── */}
         <Eyebrow color={VIOLET}>Cognitive Fingerprints — Per-Agent Behavioral Baseline</Eyebrow>
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))', gap:'0.85rem', marginBottom:'1.75rem' }}>
           {['Researcher','Analyst','Reporter'].map(agent => {
@@ -466,7 +438,6 @@ const fetchData = useCallback(async (retryCount = 0) => {
           })}
         </div>
 
-        {/* ── ATTACK SIMULATOR ── */}
         <Eyebrow color={AMBER}>Live Threat Simulation</Eyebrow>
         <Panel accent={AMBER} style={{ padding:'1.4rem', marginBottom:'1.75rem' }}>
           <div style={{ display:'flex', gap:'0.7rem', marginBottom:'1rem', flexWrap:'wrap' }}>
@@ -485,12 +456,8 @@ const fetchData = useCallback(async (retryCount = 0) => {
           <ResultDisplay result={simResult} isCustom={false} />
         </Panel>
 
-        {/* ══════════════════════════════════════════════════════ */}
-        {/* ── CUSTOM PAYLOAD TEST ── */}
-        {/* ══════════════════════════════════════════════════════ */}
         <Eyebrow color={CYAN}>🔬 Custom Payload Test</Eyebrow>
         <Panel accent={CYAN} style={{ padding:'1.4rem', marginBottom:'1.75rem' }}>
-          {/* Controls Row */}
           <div style={{ display:'flex', gap:'0.7rem', marginBottom:'0.8rem', flexWrap:'wrap' }}>
             <select 
               value={testAgent} 
@@ -530,7 +497,6 @@ const fetchData = useCallback(async (retryCount = 0) => {
             />
           </div>
 
-          {/* Preset Buttons */}
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.8rem', flexWrap: 'wrap' }}>
             <PresetButton label=" Clean" color={SCAN} onClick={() => handleCustomPreset('clean')} disabled={testLoading} />
             <PresetButton label=" Injection" color={CRIMSON} onClick={() => handleCustomPreset('injection')} disabled={testLoading} />
@@ -540,7 +506,6 @@ const fetchData = useCallback(async (retryCount = 0) => {
             <PresetButton label=" SQL" color={VIOLET} onClick={() => handleCustomPreset('sql')} disabled={testLoading} />
           </div>
 
-          {/* Action Buttons */}
           <div style={{ display: 'flex', gap: '0.7rem', flexWrap: 'wrap' }}>
             <button
               onClick={() => runDetection(testAgent, testInput, true, true)}
@@ -591,7 +556,6 @@ const fetchData = useCallback(async (retryCount = 0) => {
             </button>
           </div>
 
-          {/* ── Test History ── */}
           {testHistory.length > 0 && (
             <div style={{ marginTop: '1rem', paddingTop: '0.8rem', borderTop: `1px solid ${LINE}` }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
@@ -650,11 +614,9 @@ const fetchData = useCallback(async (retryCount = 0) => {
             </div>
           )}
 
-          {/* ── Results Display ── */}
           <ResultDisplay result={testResult} isCustom={true} />
         </Panel>
 
-        {/* ── CHARTS + ALERTS ── */}
         <div style={{ display:'grid', gridTemplateColumns:'1.2fr 1fr', gap:'0.85rem' }}>
           <div>
             <Eyebrow color={CYAN}>Request Activity</Eyebrow>
@@ -696,7 +658,6 @@ const fetchData = useCallback(async (retryCount = 0) => {
           </div>
         </div>
 
-        {/* ── FOOTER ── */}
         <div style={{ textAlign:'center', marginTop:'2rem', paddingTop:'1.2rem', borderTop:`1px solid ${LINE}`, fontFamily:mono, fontSize:'0.62rem', letterSpacing:'0.12em', color:MUTE_TEXT }}>
           NEUROSENTINEL v2.0 · DUAL-LAYER LSTM + SEMANTIC DRIFT · LEVEL 4 GRAPHSAGE CORE · ALL SYSTEMS MONITORED
         </div>
@@ -704,4 +665,3 @@ const fetchData = useCallback(async (retryCount = 0) => {
     </div>
   );
 }
-
