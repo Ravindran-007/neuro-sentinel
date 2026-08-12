@@ -12,3 +12,5 @@ htmlcov/
 *.sqlite3
 .vercel
 .env*
+node_modules
+test_env/
