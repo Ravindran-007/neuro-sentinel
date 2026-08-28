@@ -7,7 +7,11 @@ import {
   AgentNode, PresetButton, ResultDisplay
 } from './components/MemoizedComponents';
 
+axios.defaults.headers.common['X-API-Key'] = 'demo_key';
+
 const API_URL = 'https://neuro-sentinel-0nhi.onrender.com';
+const DEFAULT_MSE = { Researcher: 0.0145, Analyst: 0.0182, Reporter: 0.0056 };
+const DEFAULT_DRIFT = { Researcher: 0.501, Analyst: 0.690, Reporter: 0.730 };
 
 const INK     = '#070B14';
 const PANEL2  = '#101A2E';
@@ -68,14 +72,14 @@ export default function App() {
   const [thresholds, setThresholds] = useState(null);
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState(null);
-  const [history, setHistory]       = useState([defaultDrift, defaultMSE]);
-  const [alerts, setAlerts]         = useState([defaultDrift, defaultMSE]);
+  const [history, setHistory]       = useState([]);
+  const [alerts, setAlerts]         = useState([]);
 
   const [testAgent, setTestAgent]   = useState('Analyst');
   const [testInput, setTestInput]   = useState('');
   const [testResult, setTestResult] = useState(null);
   const [testLoading, setTestLoading] = useState(false);
-  const [testHistory, setTestHistory] = useState([defaultDrift, defaultMSE]);
+  const [testHistory, setTestHistory] = useState([]);
 
   const [simAgent,   setSimAgent]   = useState('Analyst');
   const [simInput]                  = useState('');
@@ -88,7 +92,7 @@ export default function App() {
     Reporter:   { status:'CLEAN', mse:0.0056, drift:0.730 },
   });
 
-const fetchData = useCallback(async (retryCount = 0) => {
+  const fetchData = useCallback(async (retryCount = 0) => {
     try {
       const [hRes, tRes] = await Promise.all([
         axios.get(`${API_URL}/api/health`, { timeout: 70000 }),
@@ -112,13 +116,9 @@ const fetchData = useCallback(async (retryCount = 0) => {
         setLoading(false);
       }
     }
-  }, [defaultDrift, defaultMSE]);
+  }, []);
 
-  const defaultMSE = { Researcher: 0.0145, Analyst: 0.0182, Reporter: 0.0056 };
-  const defaultDrift = { Researcher: 0.501, Analyst: 0.690, Reporter: 0.730 };
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-const fetchAgentData = useCallback(async () => {
+  const fetchAgentData = useCallback(async () => {
     try {
       const agents = ['Researcher', 'Analyst', 'Reporter'];
       const results = await Promise.all(
@@ -135,27 +135,27 @@ const fetchAgentData = useCallback(async () => {
         if (data?.checkpoint) {
           newNodes[agent] = {
             status: 'CLEAN',
-            mse: data.checkpoint.mse || defaultMSE[agent],
-            drift: data.checkpoint.telemetry?.entropy || defaultDrift[agent],
+            mse: data.checkpoint.mse || DEFAULT_MSE[agent],
+            drift: data.checkpoint.telemetry?.entropy || DEFAULT_DRIFT[agent],
           };
         } else {
           newNodes[agent] = {
             status: 'CLEAN',
-            mse: defaultMSE[agent],
-            drift: defaultDrift[agent],
+            mse: DEFAULT_MSE[agent],
+            drift: DEFAULT_DRIFT[agent],
           };
         }
       });
 
       setNodes(newNodes);
-    } catch (e) {
+    } catch {
     }
-  }, [defaultDrift, defaultMSE]);
+  }, []);
 
   useEffect(() => {
     axios.get(`${API_URL}/api/health`, { timeout: 70000 })
       .catch(() => {});
-  }, [defaultDrift, defaultMSE]);
+  }, []);
 
   useEffect(() => {
     fetchData();
@@ -179,11 +179,19 @@ const fetchAgentData = useCallback(async () => {
     }
 
     try {
-      const res = await axios.post(`${API_URL}/api/detect`, {
-        agent_role: agent,
-        user_input: input,
-        llm_provider: 'groq',
-      });
+      const res = await axios.post(
+        `${API_URL}/api/detect`,
+        {
+          agent_role: agent,
+          user_input: input,
+          llm_provider: 'groq',
+        },
+        {
+          headers: {
+            'X-API-Key': 'demo_key'  
+          }
+        }
+      );
       
       const d = res.data;
       
