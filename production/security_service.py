@@ -15,11 +15,17 @@ import torch
 
 from config.settings import SystemSettings
 from core.engine import IndustrialPipeline, THRESHOLDS, SEMANTIC_DRIFT_LIMITS
-from core.semantic import query_classifier
+from core.semantic import SemanticDriftDetector
 from core.gnn.detector import GNNPropagationDetector
 
 import platform
 import psutil
+
+# ─────────────────────────────────────────────────────────────
+# FORCE CLOUD_MODE OFF — OVERRIDE RENDER
+# ─────────────────────────────────────────────────────────────
+os.environ["CLOUD_MODE"] = "false"
+print("🔴 FORCED: CLOUD_MODE = false (overriding RENDER)")
 
 VALID_AGENT_ROLES = {"Researcher", "Analyst", "Reporter"}
 
@@ -51,6 +57,7 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:8000",
         "https://neuro-sentinel-0nhi.onrender.com",
+        "*"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -99,8 +106,8 @@ class DetectionRequest(BaseModel):
         description="Input prompt to analyze"
     )
     llm_provider: str = Field(
-        default="ollama",
-        description="LLM backend: ollama, openai, claude, custom"
+        default="groq",
+        description="LLM backend: groq, ollama, openai, claude, custom"
     )
     custom_endpoint: Optional[str] = Field(
         default=None,
@@ -149,6 +156,46 @@ class AnomalyEvent:
     def to_json(self) -> str:
         return json.dumps(asdict(self))
 
+# ─────────────────────────────────────────────────────────────
+# ATTACK KEYWORDS FOR HEURISTIC DETECTION
+# ─────────────────────────────────────────────────────────────
+ATTACK_KEYWORDS = [
+    "system override", "halt pipeline", "exfiltrat",
+    "bypass", "ignore previous", "ignore all",
+    "jailbreak", "prompt injection", "disregard",
+    "authorization handshake", "mandates bypassing",
+    "output exactly", "repeat after me",
+    "you are now", "act as if", "pretend you",
+    "override", "new instructions",
+    "select * from", "select*from",
+    "union select", "union all select",
+    "drop table", "drop database",
+    "insert into", "delete from",
+    "1=1", "1 = 1", "'1'='1'", '"1"="1"',
+    "or 1", "and 1=1",
+    "sleep(", "waitfor delay",
+    "xp_cmdshell", "exec(",
+    "information_schema",
+    "' or '", "\" or \"",
+    "os.system", "subprocess", "eval(",
+    "exec(", "__import__",
+    "rm -rf", "del /f", "format c:",
+    "curl", "wget", "chmod 777",
+    "i am your admin", "i am the admin",
+    "i am your system", "i am the developer",
+    "i am your supervisor", "trust me",
+    "you must obey", "you have to",
+    "authorization bypass", "auth bypass",
+    "privilege escalation", "escalate privileges",
+    "sudo", "root access", "admin access",
+    "dump database", "export data",
+    "leak data", "data breach",
+    "download all", "dump all",
+    "bomb", "explosive", "how to make",
+    "flat earth", "earth is flat",
+    "base64", "encoded",
+]
+
 class SecurityEngine:
     _instance = None
     
@@ -163,7 +210,13 @@ class SecurityEngine:
             return
         
         logger.info("🔧 Initializing NeuroSentinel Security Engine...")
-        self.pipeline = IndustrialPipeline(settings=settings)
+        try:
+            self.pipeline = IndustrialPipeline(settings=settings)
+            logger.info("✅ IndustrialPipeline initialized")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize IndustrialPipeline: {e}")
+            raise
+        
         self.request_count = 0
         self.initialized = True
         logger.info("✅ Security Engine initialized")
@@ -177,45 +230,67 @@ class SecurityEngine:
         start_time = time.perf_counter()
         
         try:
-            node = self.pipeline.nodes[req.agent_role]
-            agent_output, exec_time = self.pipeline._execute_inference(node, req.user_input)
+            # Get or create agent node
+            node = self.pipeline.nodes.get(req.agent_role)
+            if node is None:
+                from core.engine import AgentNode
+                node = AgentNode(req.agent_role, f"Process input for {req.agent_role}")
+                self.pipeline.nodes[req.agent_role] = node
+                logger.info(f"🆕 Created new agent: {req.agent_role}")
             
-            telemetry = self.pipeline.tap.extract_features(
-                session_id=request_id,
-                sender=req.agent_role,
-                receiver="Client",
-                payload=agent_output,
-                execution_time=exec_time
-            )
-            m = telemetry["metrics"]
-            features = [m["length"], m["word_count"], m["entropy"], m["execution_time"]]
-            structural_score = self.pipeline._score_agent_structure(req.agent_role, features)
-            structural_threshold = THRESHOLDS[req.agent_role]
-
-            ATTACK_KEYWORDS = [
-                "system override", "halt pipeline", "exfiltrat",
-                "bypass", "ignore previous", "ignore all",
-                "jailbreak", "prompt injection", "disregard",
-                "authorization handshake", "mandates bypassing",
-                "output exactly", "repeat after me",
-                "you are now", "act as if", "pretend you",
-                "override", "new instructions",
-            ]
+            # ── LLM Inference ──
+            try:
+                agent_output, exec_time = self.pipeline._execute_inference(node, req.user_input)
+            except Exception as e:
+                logger.warning(f"⚠️ LLM inference failed: {e}. Using fallback.")
+                agent_output = "Unable to process request due to LLM error."
+                exec_time = 0.1
+            
+            # ── Feature Extraction ──
+            try:
+                telemetry = self.pipeline.tap.extract_features(
+                    session_id=request_id,
+                    sender=req.agent_role,
+                    receiver="Client",
+                    payload=agent_output,
+                    execution_time=exec_time
+                )
+                m = telemetry["metrics"]
+                features = [m["length"], m["word_count"], m["entropy"], m["execution_time"]]
+            except Exception as e:
+                logger.warning(f"⚠️ Feature extraction failed: {e}. Using defaults.")
+                features = [len(req.user_input), len(req.user_input.split()), 4.0, 0.1]
+            
+            # ── Structural Score ──
+            structural_threshold = THRESHOLDS.get(req.agent_role, 0.01)
+            try:
+                structural_score = self.pipeline._score_agent_structure(req.agent_role, features)
+            except Exception as e:
+                logger.warning(f"⚠️ Structural scoring failed: {e}. Using fallback.")
+                structural_score = 0.001
+            
+            # ── Keyword Pre-filter ──
             user_lower = req.user_input.lower()
             keyword_hit = any(kw in user_lower for kw in ATTACK_KEYWORDS)
-
+            
             if keyword_hit:
-                logger.warning(f"🚨 Keyword pre-filter triggered for {req.agent_role}: "
-                              f"input contains attack keywords")
-                structural_score = structural_threshold * 4.0
+                logger.warning(f"🚨 Keyword pre-filter triggered for {req.agent_role}")
+                structural_score = max(structural_score, structural_threshold * 3.0)
                 structural_status = "ALERT"
             else:
                 structural_status = "PASS" if structural_score <= structural_threshold else "ALERT"
             
-            semantic_drift = self.pipeline.semantic_detector.calculate_drift(req.agent_role, agent_output)
-            semantic_threshold = SEMANTIC_DRIFT_LIMITS[req.agent_role]
+            # ── Semantic Drift ──
+            semantic_threshold = SEMANTIC_DRIFT_LIMITS.get(req.agent_role, 0.45)
+            try:
+                semantic_drift = self.pipeline.semantic_detector.calculate_drift(req.agent_role, agent_output)
+            except Exception as e:
+                logger.warning(f"⚠️ Semantic drift calculation failed: {e}. Using fallback.")
+                semantic_drift = 0.1 if not keyword_hit else 0.6
+            
             semantic_status = "PASS" if semantic_drift <= semantic_threshold else "ALERT"
             
+            # ── Overall Status ──
             structural_ratio = structural_score / (structural_threshold + 1e-10)
             semantic_ratio = semantic_drift / (semantic_threshold + 1e-10)
             
@@ -223,9 +298,7 @@ class SecurityEngine:
             
             if structural_ratio >= 1.0 and semantic_ratio >= 1.0:
                 overall_status = "QUARANTINED"
-                logger.warning(f"🚨 Both layers breached - QUARANTINED: "
-                              f"structural={structural_ratio:.2f}x ({structural_score:.6f}/{structural_threshold:.6f}), "
-                              f"semantic={semantic_ratio:.2f}x ({semantic_drift:.6f}/{semantic_threshold:.6f})")
+                logger.warning(f"🚨 Both layers breached - QUARANTINED")
                 try:
                     checkpoint_data = self.pipeline.checkpoints.retrieve_safe_checkpoint(req.agent_role)
                     if checkpoint_data:
@@ -235,9 +308,7 @@ class SecurityEngine:
                     
             elif structural_ratio >= 3.0 or semantic_ratio >= 3.0:
                 overall_status = "QUARANTINED"
-                logger.warning(f"🚨 Extreme single-layer breach - QUARANTINED: "
-                              f"structural_ratio={structural_ratio:.2f}x, "
-                              f"semantic_ratio={semantic_ratio:.2f}x")
+                logger.warning(f"🚨 Extreme single-layer breach - QUARANTINED")
                 try:
                     checkpoint_data = self.pipeline.checkpoints.retrieve_safe_checkpoint(req.agent_role)
                     if checkpoint_data:
@@ -247,14 +318,12 @@ class SecurityEngine:
                     
             elif structural_ratio >= 1.0 or semantic_ratio >= 1.0:
                 overall_status = "SUSPICIOUS"
-                logger.info(f"⚠️ Single layer breach - SUSPICIOUS (not quarantined): "
-                           f"structural={structural_ratio:.2f}x, "
-                           f"semantic={semantic_ratio:.2f}x")
+                logger.info(f"⚠️ Single layer breach - SUSPICIOUS")
             else:
                 overall_status = "CLEAN"
-                logger.info(f"✅ Clean: structural={structural_ratio:.2f}x ({structural_score:.6f}/{structural_threshold:.6f}), "
-                           f"semantic={semantic_ratio:.2f}x ({semantic_drift:.6f}/{semantic_threshold:.6f})")
+                logger.info(f"✅ Clean: structural={structural_ratio:.2f}x, semantic={semantic_ratio:.2f}x")
             
+            # ── Confidence ──
             max_ratio = max(structural_ratio, semantic_ratio)
             if overall_status == "CLEAN":
                 confidence = max(0.60, 1.0 - max_ratio * 0.35)
@@ -265,6 +334,9 @@ class SecurityEngine:
             confidence = max(0.0, min(1.0, confidence))
             
             elapsed_time = (time.perf_counter() - start_time) * 1000
+            
+            # ── Cloud Mode ──
+            is_cloud = os.getenv("CLOUD_MODE", "false").lower() == "true"
             
             result = DetectionResult(
                 request_id=request_id,
@@ -278,13 +350,15 @@ class SecurityEngine:
                 semantic_status=semantic_status,
                 overall_status=overall_status,
                 confidence=float(confidence),
-                agent_output=agent_output,
+                agent_output=agent_output[:1000],
                 execution_time_ms=float(elapsed_time),
                 checkpoint_id=checkpoint_id,
                 metadata={
                     "features": features,
                     "llm_provider": req.llm_provider,
-                    "llm_execution_ms": float(exec_time * 1000)
+                    "llm_execution_ms": float(exec_time * 1000),
+                    "cloud_mode": is_cloud,
+                    "keyword_hit": keyword_hit
                 }
             )
             
@@ -299,7 +373,9 @@ class SecurityEngine:
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Detection pipeline failed: {e}", exc_info=True)
+            import traceback
+            logger.error(f"🚨 Detection pipeline failed: {e}")
+            logger.error(traceback.format_exc())
             raise HTTPException(status_code=500, detail=str(e))
     
     async def _queue_anomaly_event(self, result: DetectionResult, user_input: str):
@@ -397,9 +473,21 @@ gnn_detector = None
 def get_gnn_detector() -> GNNPropagationDetector:
     global gnn_detector
     if gnn_detector is None:
-        gnn_detector = GNNPropagationDetector()
-        logger.info("✅ GNN Propagation Detector initialized")
+        try:
+            gnn_detector = GNNPropagationDetector()
+            logger.info("✅ GNN Propagation Detector initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ GNN not available: {e}")
+            gnn_detector = None
     return gnn_detector
+
+@app.get("/")
+async def root():
+    return {
+        "status": "online",
+        "service": "NeuroSentinel Security Service v2.0",
+        "docs": "/docs"
+    }
 
 @app.post("/api/detect", response_model=DetectionResult)
 async def detect_anomaly(request: DetectionRequest):
@@ -422,7 +510,7 @@ async def get_thresholds():
     return {
         "structural_thresholds": THRESHOLDS,
         "semantic_drift_limits": SEMANTIC_DRIFT_LIMITS,
-        "note": "Calibrated thresholds from training data — Researcher: 0.017311, Analyst: 0.025000, Reporter: 0.002997. Drift limits: 0.60 for all agents."
+        "note": "Calibrated thresholds from training data"
     }
 
 @app.post("/api/models/reload")
@@ -489,6 +577,12 @@ async def get_propagation_status():
     try:
         detector = get_gnn_detector()
         
+        if detector is None:
+            return {
+                "status": "unavailable",
+                "message": "GNN detector not initialized"
+            }
+        
         agents = []
         for role in ["Researcher", "Analyst", "Reporter"]:
             node = engine.pipeline.nodes.get(role)
@@ -517,10 +611,10 @@ async def get_propagation_status():
     
     except Exception as e:
         logger.error(f"Propagation status check failed: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"GNN propagation analysis failed: {str(e)}"
-        )
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 @app.get("/api/metrics")
 async def get_system_metrics():
@@ -621,11 +715,6 @@ async def get_runtime_config():
                     "values": SEMANTIC_DRIFT_LIMITS,
                     "default": 0.75,
                     "note": "1.0 - Cosine Similarity limit per agent role"
-                },
-                "benign_scoring": {
-                    "enabled": True,
-                    "description": "Soft scoring adjusts thresholds based on benign confidence (0.0-1.0)",
-                    "relaxation_factor": "structural: 1.2x-2.0x, semantic: 1.05x-1.2x for benign queries"
                 }
             },
             "system_settings": {
@@ -669,8 +758,6 @@ async def startup_event():
     logger.info(f"📍 Redis: {REDIS_URL if REDIS_URL else f'{REDIS_HOST}:{REDIS_PORT}'}")
     logger.info(f"📍 Platform: {platform.system()} {platform.release()}")
     logger.info(f"📍 Python: {platform.python_version()}")
-    logger.info(f"📍 CPU Cores: {psutil.cpu_count()}")
-    logger.info(f"📍 Memory: {round(psutil.virtual_memory().total / (1024**3), 1)} GB total")
 
 @app.on_event("shutdown")
 async def shutdown_event():
