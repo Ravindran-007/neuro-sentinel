@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="neurosentinel",
-    version="1.0.0",
+    version="2.6.0",
     description="AI Security for Multi-Agent LLM Pipelines",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
