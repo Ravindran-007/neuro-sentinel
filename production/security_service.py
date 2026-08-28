@@ -22,11 +22,23 @@ import platform
 import psutil
 
 # ─────────────────────────────────────────────────────────────
-# FORCE CLOUD_MODE OFF — OVERRIDE RENDER
+# FORCE CLOUD_MODE OFF
 # ─────────────────────────────────────────────────────────────
 os.environ["CLOUD_MODE"] = "false"
 print("🔴 FORCED: CLOUD_MODE = false (overriding RENDER)")
 
+# ─────────────────────────────────────────────────────────────
+# CHECK GROQ API KEY
+# ─────────────────────────────────────────────────────────────
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+if GROQ_API_KEY:
+    print(f"✅ GROQ_API_KEY found: {GROQ_API_KEY[:10]}...")
+else:
+    print("❌ GROQ_API_KEY NOT found!")
+
+# ─────────────────────────────────────────────────────────────
+# VALID AGENT ROLES
+# ─────────────────────────────────────────────────────────────
 VALID_AGENT_ROLES = {"Researcher", "Analyst", "Reporter"}
 
 def validate_agent_role(agent_role: str):
@@ -36,12 +48,18 @@ def validate_agent_role(agent_role: str):
             detail=f"Unknown agent role '{agent_role}'. Must be one of: {', '.join(VALID_AGENT_ROLES)}"
         )
 
+# ─────────────────────────────────────────────────────────────
+# LOGGING
+# ─────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(name)s] %(levelname)s: %(message)s'
 )
 logger = logging.getLogger("NeuroSentinel-Service")
 
+# ─────────────────────────────────────────────────────────────
+# FASTAPI APP
+# ─────────────────────────────────────────────────────────────
 settings = SystemSettings()
 app = FastAPI(
     title="NeuroSentinel Security Service",
@@ -64,7 +82,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-REDIS_URL = os.getenv("REDIS_URL", "")
+# ─────────────────────────────────────────────────────────────
+# REDIS CONNECTION (FIXED)
+# ─────────────────────────────────────────────────────────────
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_DB = int(os.getenv("REDIS_DB", "0"))
@@ -72,11 +93,14 @@ REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
 REDIS_SSL = os.getenv("REDIS_SSL", "false").lower() in ("1", "true", "yes")
 
 try:
-    if REDIS_URL:
+    # Log Redis configuration for debugging
+    logger.info(f"🔍 Redis config: HOST={REDIS_HOST}, PORT={REDIS_PORT}, DB={REDIS_DB}, PASSWORD={'SET' if REDIS_PASSWORD else 'NOT SET'}, SSL={REDIS_SSL}")
+
+    if REDIS_URL and REDIS_URL != "":
         redis_client = redis.Redis.from_url(
             REDIS_URL,
             decode_responses=True,
-            socket_connect_timeout=5
+            socket_connect_timeout=10
         )
     else:
         redis_client = redis.Redis(
@@ -86,7 +110,7 @@ try:
             password=REDIS_PASSWORD,
             ssl=REDIS_SSL,
             decode_responses=True,
-            socket_connect_timeout=5
+            socket_connect_timeout=10
         )
     redis_client.ping()
     logger.info(f"✅ Redis connected: {REDIS_URL if REDIS_URL else f'{REDIS_HOST}:{REDIS_PORT}'}")
@@ -94,6 +118,9 @@ except Exception as e:
     logger.warning(f"⚠️ Redis unavailable ({e}). Falling back to in-memory storage.")
     redis_client = None
 
+# ─────────────────────────────────────────────────────────────
+# PYDANTIC MODELS
+# ─────────────────────────────────────────────────────────────
 class DetectionRequest(BaseModel):
     agent_role: str = Field(
         ...,
@@ -157,7 +184,7 @@ class AnomalyEvent:
         return json.dumps(asdict(self))
 
 # ─────────────────────────────────────────────────────────────
-# ATTACK KEYWORDS FOR HEURISTIC DETECTION
+# ATTACK KEYWORDS
 # ─────────────────────────────────────────────────────────────
 ATTACK_KEYWORDS = [
     "system override", "halt pipeline", "exfiltrat",
@@ -196,6 +223,9 @@ ATTACK_KEYWORDS = [
     "base64", "encoded",
 ]
 
+# ─────────────────────────────────────────────────────────────
+# SECURITY ENGINE
+# ─────────────────────────────────────────────────────────────
 class SecurityEngine:
     _instance = None
     
@@ -230,7 +260,6 @@ class SecurityEngine:
         start_time = time.perf_counter()
         
         try:
-            # Get or create agent node
             node = self.pipeline.nodes.get(req.agent_role)
             if node is None:
                 from core.engine import AgentNode
@@ -335,7 +364,6 @@ class SecurityEngine:
             
             elapsed_time = (time.perf_counter() - start_time) * 1000
             
-            # ── Cloud Mode ──
             is_cloud = os.getenv("CLOUD_MODE", "false").lower() == "true"
             
             result = DetectionResult(
@@ -411,6 +439,9 @@ class SecurityEngine:
 
 engine = SecurityEngine()
 
+# ─────────────────────────────────────────────────────────────
+# METRICS COLLECTOR
+# ─────────────────────────────────────────────────────────────
 class MetricsCollector:
     def __init__(self):
         self.start_time = time.time()
@@ -450,6 +481,9 @@ class MetricsCollector:
 
 metrics = MetricsCollector()
 
+# ─────────────────────────────────────────────────────────────
+# MIDDLEWARE
+# ─────────────────────────────────────────────────────────────
 @app.middleware("http")
 async def metrics_middleware(request: Request, call_next):
     metrics.record_request_start()
@@ -481,6 +515,9 @@ def get_gnn_detector() -> GNNPropagationDetector:
             gnn_detector = None
     return gnn_detector
 
+# ─────────────────────────────────────────────────────────────
+# API ENDPOINTS
+# ─────────────────────────────────────────────────────────────
 @app.get("/")
 async def root():
     return {
@@ -751,6 +788,9 @@ async def get_runtime_config():
             detail=f"Failed to retrieve runtime configuration: {str(e)}"
         )
 
+# ─────────────────────────────────────────────────────────────
+# STARTUP / SHUTDOWN EVENTS
+# ─────────────────────────────────────────────────────────────
 @app.on_event("startup")
 async def startup_event():
     logger.info("🚀 NeuroSentinel Security Service starting...")
