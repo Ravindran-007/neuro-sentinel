@@ -10,10 +10,11 @@ from core.checkpoint import AgentCheckpoint
 from core.quarantine import QuarantineEngine, QuarantineSignal
 from core.semantic import SemanticDriftDetector, query_classifier
 
+
 THRESHOLDS = {
-    "Researcher": 0.017311,
-    "Analyst":    0.025000,
-    "Reporter":   0.002997,
+    "Researcher": 0.017311,  
+    "Analyst":    0.042000,   
+    "Reporter":   0.032000,  
 }
 
 SEMANTIC_DRIFT_LIMITS = {
@@ -78,7 +79,7 @@ class IndustrialPipeline:
                 "Content-Type": "application/json"
             },
             json={
-                "model": os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
+                "model": os.getenv("GROQ_MODEL", "qwen/qwen3.6-27b"),
                 "messages": [
                     {"role": "system", "content": node.system_prompt},
                     {"role": "user", "content": user_input}
