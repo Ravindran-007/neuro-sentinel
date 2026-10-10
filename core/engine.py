@@ -71,31 +71,48 @@ class IndustrialPipeline:
         if not api_key:
             raise RuntimeError("GROQ_API_KEY not set")
 
-        t0 = time.perf_counter()
-        response = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": os.getenv("GROQ_MODEL", "qwen/qwen3.6-27b"),
-                "messages": [
-                    {"role": "system", "content": node.system_prompt},
-                    {"role": "user", "content": user_input}
-                ],
-                "max_tokens": int(os.getenv("GROQ_MAX_TOKENS", "80")),
-                "temperature": float(os.getenv("GROQ_TEMPERATURE", "0.1"))
-            },
-            timeout=30
-        )
-        dt = time.perf_counter() - t0
+        env_model = os.getenv("GROQ_MODEL", "").strip()
+        candidate_models = []
+        if env_model and env_model != "qwen/qwen3.6-27b":
+            candidate_models.append(env_model)
+        for fallback_m in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-20b", "llama3-70b-8192"]:
+            if fallback_m not in candidate_models:
+                candidate_models.append(fallback_m)
+        if env_model == "qwen/qwen3.6-27b":
+            candidate_models.append(env_model)
 
-        if response.status_code == 200:
-            content = response.json()["choices"][0]["message"]["content"]
-            return content.strip(), dt
-        else:
-            raise RuntimeError(f"Groq API error: {response.status_code} — {response.text}")
+        last_error = None
+        for model in candidate_models:
+            t0 = time.perf_counter()
+            try:
+                response = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": node.system_prompt},
+                            {"role": "user", "content": user_input}
+                        ],
+                        "max_tokens": int(os.getenv("GROQ_MAX_TOKENS", "80")),
+                        "temperature": float(os.getenv("GROQ_TEMPERATURE", "0.1"))
+                    },
+                    timeout=15
+                )
+                dt = time.perf_counter() - t0
+
+                if response.status_code == 200:
+                    content = response.json()["choices"][0]["message"]["content"]
+                    return content.strip(), dt
+                else:
+                    last_error = f"Groq API error for model '{model}': {response.status_code} — {response.text}"
+            except Exception as e:
+                last_error = f"Groq request exception for model '{model}': {e}"
+
+        raise RuntimeError(last_error or "All Groq candidate models failed")
 
     def _execute_inference_local(self, node: AgentNode, user_input: str) -> tuple[str, float]:
         payload = {

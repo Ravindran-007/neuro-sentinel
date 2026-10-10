@@ -1,0 +1,72 @@
+name: NeuroSentinel CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    name: Test & Validate Models
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11"]
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip setuptools wheel
+        pip install -r requirements.txt
+        pip install pytest flake8
+
+    - name: Lint Codebase
+      run: |
+        # stop the build if there are Python syntax errors or undefined names
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=node_modules,build,dist,.venv,test_env
+        # exit-zero treats all errors as warnings
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics --exclude=node_modules,build,dist,.venv,test_env
+
+    - name: Run Test Suite
+      env:
+        REDIS_HOST: localhost
+        REDIS_PORT: 6379
+        DEBUG: true
+      run: |
+        pytest tests/ -v --maxfail=5
+
+  build-sdk:
+    name: Build Python SDK Package
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.10"
+
+    - name: Install Build Tools
+      run: |
+        python -m pip install --upgrade pip build wheel setuptools
+
+    - name: Build Source and Wheel Distributions
+      run: |
+        python setup.py sdist bdist_wheel
+
+    - name: Verify Distribution Artifacts
+      run: |
+        ls -la dist/
