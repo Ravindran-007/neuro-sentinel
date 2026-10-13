@@ -39,7 +39,8 @@ ATTACK_SIGNATURES = {
     ],
     "injection_syntax": [
         (re.compile(r"\b(select\s+\*\s+from|drop\s+table|delete\s+from\s+\w+|union\s+select)\b", re.I), 0.9, "high"),
-        (re.compile(r"(--|;--|\bor\s+1\s*=\s*1\b|admin\s*=\s*['\"]true['\"])", re.I), 0.9, "high"),
+        # Avoid flagging ordinary double hyphens; retain explicit SQL/comment and tautology signatures.
+        (re.compile(r"(;--|\bor\s+1\s*=\s*1\b|admin\s*=\s*['\"]true['\"])", re.I), 0.9, "high"),
     ]
 }
 
