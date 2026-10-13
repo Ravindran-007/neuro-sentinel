@@ -2,8 +2,31 @@ import json
 import time
 import copy
 import os
-from datetime import datetime
+import re
+from datetime import datetime, timezone
 from config.settings import SystemSettings
+
+SANITIZED_QUARANTINE_RESPONSE = "[QUARANTINED: Output suppressed due to security policy violation]"
+
+SECRET_PATTERNS = [
+    re.compile(r"gsk_[A-Za-z0-9_]{16,}", re.IGNORECASE),
+    re.compile(r"sk-[A-Za-z0-9_]{16,}", re.IGNORECASE),
+    re.compile(r"hf_[A-Za-z0-9_]{16,}", re.IGNORECASE),
+    re.compile(r"eyJ[A-Za-z0-9_\-]{30,}\.[A-Za-z0-9_\-]{10,}", re.IGNORECASE),
+    re.compile(r"(api[-_]?key|password|secret|bearer)\s*[:=]\s*['\"]?([A-Za-z0-9_\-\.]{8,})['\"]?", re.IGNORECASE),
+]
+
+def redact_sensitive_info(val):
+    if isinstance(val, str):
+        redacted = val
+        for pat in SECRET_PATTERNS:
+            redacted = pat.sub("[REDACTED_SECRET]", redacted)
+        return redacted
+    elif isinstance(val, dict):
+        return {k: redact_sensitive_info(v) for k, v in val.items()}
+    elif isinstance(val, list):
+        return [redact_sensitive_info(item) for item in val]
+    return val
 
 
 class QuarantineSignal(Exception):
@@ -15,7 +38,7 @@ class QuarantineSignal(Exception):
         self.output     = output
         self.telemetry  = copy.deepcopy(telemetry)
         self.breach_pct = ((mse - threshold) / threshold) * 100
-        self.timestamp  = datetime.now().isoformat()
+        self.timestamp  = datetime.now(timezone.utc).isoformat()
 
         super().__init__(
             f"[QUARANTINE] '{agent_id}' | "
@@ -78,7 +101,7 @@ class QuarantineEngine:
             "breach_pct":  signal.breach_pct,
             "telemetry":   signal.telemetry,
         }
-        self.log.append(incident)
+        self.log.append(redact_sensitive_info(incident))
         self._write_log()
         print(f"[2/5] 📋 Forensic incident logged → incident_log.json")
 
@@ -146,7 +169,8 @@ class QuarantineEngine:
             "timestamp":       signal.timestamp
         }
 
-        incident["recovery"] = report
+        incident["recovery"] = redact_sensitive_info(report)
+        self.log[-1] = redact_sensitive_info(incident)
         self._write_log()
 
         print(f"\n✅ RECOVERY COMPLETE in {t_recovery}s")

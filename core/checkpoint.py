@@ -39,31 +39,40 @@ class AgentCheckpoint:
             logger.error(f"❌ Failed to save checkpoints: {e}")
 
     def save(self, agent_id: str, input_text: str,
-             output_text: str, telemetry: dict, mse: float):
+             output_text: str, telemetry: dict, mse: float) -> str:
         logger.info(f"💾 [Checkpoint] Saving checkpoint for {agent_id}")
+        checkpoint_id = f"chk_{agent_id}_{int(time.time()*1000)}"
         
         self.checkpoints[agent_id] = {
+            "id":          checkpoint_id,
             "agent_id":    agent_id,
             "input_text":  input_text,
             "output_text": output_text,
-            "telemetry":   copy.deepcopy(telemetry),
-            "mse":         mse,
+            "telemetry":   copy.deepcopy(telemetry) if telemetry else {},
+            "mse":         float(mse),
             "saved_at":    time.time()
         }
         
         logger.info(f"📝 [Checkpoint] Checkpoint data: {self.checkpoints[agent_id]}")
         self._save()
-        logger.info(f"✅ [Checkpoint] Checkpoint saved for {agent_id}")
+        logger.info(f"✅ [Checkpoint] Checkpoint saved for {agent_id} (ID: {checkpoint_id})")
+        return checkpoint_id
 
     def restore(self, agent_id: str) -> dict | None:
         logger.info(f"🔍 [Checkpoint] Restoring checkpoint for {agent_id}")
         result = self.checkpoints.get(agent_id, None)
+        if result and "id" not in result:
+            result = dict(result)
+            result["id"] = f"chk_{agent_id}_legacy"
         logger.info(f"📋 [Checkpoint] Restored: {result}")
         return result
 
     def retrieve_safe_checkpoint(self, agent_id: str) -> dict | None:
         logger.info(f"🔍 [Checkpoint] Retrieving checkpoint for {agent_id}")
         result = self.checkpoints.get(agent_id, None)
+        if result and "id" not in result:
+            result = dict(result)
+            result["id"] = f"chk_{agent_id}_legacy"
         logger.info(f"📋 [Checkpoint] Retrieved: {result}")
         return result
 

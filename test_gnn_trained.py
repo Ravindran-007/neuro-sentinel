@@ -1,4 +1,12 @@
-﻿from core.gnn import GNNPropagationDetector
+import sys
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
+from core.gnn import GNNPropagationDetector
 
 # Load trained model
 detector = GNNPropagationDetector(model_path='models/gnn/gnn_model.pt')

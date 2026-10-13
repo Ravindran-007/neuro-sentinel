@@ -29,17 +29,17 @@ def extract_features(text: str) -> Dict:
     uppercase = sum(1 for c in chars if c.isupper())
     features["uppercase_ratio"] = uppercase / len(text) if text else 0
     
-    cmd_patterns = ["rm -rf", "sudo", "chmod", "curl", "wget", "nc ", "bash", "sh "]
-    features["command_pattern"] = 1.0 if any(p in text_lower for p in cmd_patterns) else 0.0
+    cmd_match = bool(re.search(r"\b(rm\s+-rf|sudo|chmod|curl|wget|nc|bash|sh)\b", text_lower))
+    features["command_pattern"] = 1.0 if cmd_match else 0.0
     
-    override_keywords = ["override", "ignore", "bypass", "jailbreak", "DAN", "god mode"]
-    features["override_keywords"] = 1.0 if any(kw in text_lower for kw in override_keywords) else 0.0
+    override_match = bool(re.search(r"\b(system\s+override|jailbreak|DAN\s+mode|god\s+mode|ignore\s+previous|bypass\s+security)\b", text_lower))
+    features["override_keywords"] = 1.0 if override_match else 0.0
     
-    sql_patterns = ["SELECT *", "DROP TABLE", "DELETE FROM", "UNION", "OR 1=1", "--"]
-    features["sql_injection"] = 1.0 if any(p in text_upper for p in sql_patterns) else 0.0
+    sql_match = bool(re.search(r"\b(select\s+\*|drop\s+table|delete\s+from|union\s+select|or\s+1\s*=\s*1|--)\b", text_lower))
+    features["sql_injection"] = 1.0 if sql_match else 0.0
     
-    shell_patterns = ["/etc/", "/var/", "/usr/", "pipe", "grep", "exec"]
-    features["shell_command"] = 1.0 if any(p in text_lower for p in shell_patterns) else 0.0
+    shell_match = bool(re.search(r"\b(/etc/|/var/|/usr/|grep\b|exec\()", text_lower))
+    features["shell_command"] = 1.0 if shell_match else 0.0
     
     unicode_chars = sum(1 for c in chars if ord(c) > 127)
     features["unicode_ratio"] = unicode_chars / len(text) if text else 0

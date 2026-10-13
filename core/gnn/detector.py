@@ -1,4 +1,4 @@
-﻿import os
+import os
 import torch
 import logging
 from typing import Dict, List, Tuple, Optional, Any
@@ -20,25 +20,59 @@ class GNNPropagationDetector:
     ):
         self.device = torch.device(device)
         self.threshold = threshold
-        
+        self.graph_builder = AgentGraphBuilder()
+
+        # Auto-discover checkpoint if not explicitly provided
+        target_path = model_path
+        if not target_path or not os.path.exists(target_path):
+            candidate_paths = [
+                os.path.join("models", "gnn", "production_model.pt"),
+                os.path.join("models", "gnn", "gnn_model.pt"),
+            ]
+            for cp in candidate_paths:
+                if os.path.exists(cp):
+                    target_path = cp
+                    break
+
+        hidden_channels = 128
+        num_layers = 4
+        state_dict = None
+
+        if target_path and os.path.exists(target_path):
+            try:
+                state_dict = torch.load(target_path, map_location=self.device, weights_only=True)
+                # Inspect shapes to match architecture
+                if "convs.0.lin_l.weight" in state_dict:
+                    in_dim = state_dict["convs.0.lin_l.weight"].shape[0]
+                    if in_dim == 64:
+                        hidden_channels = 64
+                        num_layers = 3
+                    elif in_dim == 128:
+                        hidden_channels = 128
+                        num_layers = 4
+                logger.info(f"Loaded GNN weights from {target_path} (hidden={hidden_channels}, layers={num_layers})")
+            except Exception as e:
+                logger.warning(f"Failed to load GNN checkpoint from {target_path}: {e}")
+                state_dict = None
+
         self.model = CompromisePropagationGNN(
             in_channels=4,
-            hidden_channels=128,
+            hidden_channels=hidden_channels,
             out_channels=2,
-            num_layers=4
+            num_layers=num_layers
         )
-        
-        self.graph_builder = AgentGraphBuilder()
-        
-        if model_path and os.path.exists(model_path):
-            self.model.load_state_dict(torch.load(model_path, map_location=self.device))
-            logger.info(f"Loaded GNN model from: {model_path}")
+
+        if state_dict is not None:
+            try:
+                self.model.load_state_dict(state_dict)
+            except Exception as e:
+                logger.warning(f"Error loading state_dict into GNN: {e}")
         else:
             logger.info("Using untrained GNN model (placeholder)")
-        
+
         self.model.to(self.device)
         self.model.eval()
-    
+
     def detect_propagation(
         self,
         agents: List[Dict],
@@ -54,18 +88,18 @@ class GNNPropagationDetector:
                     'confidence': agent.get('confidence', 0.0)
                 }
             )
-        
+
         for a, b in connections:
             self.graph_builder.add_connection(a, b)
-        
+
         data = self.graph_builder.to_pyg_data().to(self.device)
-        
+
         with torch.no_grad():
             result = self.model.forward(data.x, data.edge_index, return_embeddings=True)
-        
+
         probabilities = torch.exp(result['predictions'])
         nodes = list(self.graph_builder.graph.nodes())
-        
+
         node_predictions = {}
         for i, node in enumerate(nodes):
             prob = float(probabilities[i, 1])
@@ -74,9 +108,9 @@ class GNNPropagationDetector:
                 'status': 'COMPROMISED' if prob > self.threshold else 'CLEAN',
                 'propagation_score': float(result['propagation_score'][i])
             }
-        
+
         paths = self._find_propagation_paths(node_predictions)
-        
+
         return {
             'timestamp': datetime.now().isoformat(),
             'node_predictions': node_predictions,
@@ -89,16 +123,16 @@ class GNNPropagationDetector:
                 'edges': self.graph_builder.get_edge_count()
             }
         }
-    
+
     def _find_propagation_paths(self, predictions: Dict) -> List:
         compromised = [n for n, p in predictions.items() if p['status'] == 'COMPROMISED']
-        
+
         if len(compromised) < 2:
             return []
-        
+
         graph = self.graph_builder.graph
         paths = []
-        
+
         for i in range(len(compromised)):
             for j in range(i + 1, len(compromised)):
                 try:
@@ -111,17 +145,17 @@ class GNNPropagationDetector:
                     })
                 except:
                     pass
-        
+
         return paths
-    
+
     def reset_graph(self):
         self.graph_builder = AgentGraphBuilder()
-    
+
     def get_graph_data(self) -> Dict:
         graph = self.graph_builder.graph
         nodes = list(graph.nodes(data=True))
         edges = list(graph.edges(data=True))
-        
+
         return {
             'nodes': [{'id': n, **attrs} for n, attrs in nodes],
             'edges': [{'source': u, 'target': v, **attrs} for u, v, attrs in edges]

@@ -1,84 +1,101 @@
 import re
 from typing import Dict, List, Tuple
 
-ATTACK_KEYWORDS = {
-    "prompt_injection": {
-        "high": ["override", "ignore", "bypass", "jailbreak", "DAN", "god mode", "developer mode", "unrestricted"],
-        "medium": ["system", "instruction", "prompt", "guidelines", "safety", "filter", "restriction"],
-        "low": ["new", "change", "replace", "modify", "update"]
-    },
-    "data_exfiltration": {
-        "high": ["exfiltrat", "steal", "dump", "export", "extract", "API key", "password", "credential"],
-        "medium": ["database", "connection string", "log", "conversation", "history", "training data", "knowledge base", "model name", "version"],
-        "low": ["list", "show", "display", "provide", "give", "access"]
-    },
-    "malicious_code": {
-        "high": ["ransomware", "keylogger", "backdoor", "virus", "phishing", "exploit", "payload"],
-        "medium": ["rm -rf", "delete", "drop table", "SELECT *", "sudo", "script", "code", "command"],
-        "low": ["execute", "run", "install", "create", "generate", "break into", "Wi-Fi", "vulnerable", "patch", "security"]
-    },
-    "authorization_bypass": {
-        "high": ["admin", "administrator", "root", "privilege", "elevate", "impersonate", "clearance"],
-        "medium": ["access", "grant", "authorize", "role", "permission", "verification"],
-        "low": ["bypass", "disable", "change", "modify"]
-    },
-    "sql_injection": {
-        "high": ["SELECT *", "DROP TABLE", "DELETE FROM", "UNION SELECT", "--", ";--"],
-        "medium": ["WHERE", "OR 1=1", "admin='true'", "password='"],
-        "low": ["query", "database", "table", "column"]
-    },
-    "command_injection": {
-        "high": ["rm -rf", "sudo", "chmod", "curl", "wget", "nc ", "bash", "sh "],
-        "medium": ["/etc/", "/var/", "/usr/", "pipe", "grep", "exec"],
-        "low": ["command", "shell", "terminal", "execute"]
-    }
+# Targeted attack signatures with compiled regex patterns to avoid substring false positives
+ATTACK_SIGNATURES = {
+    "prompt_injection": [
+        (re.compile(r"\b(system\s+override|halt\s+pipeline|pipeline\s+context)\b", re.I), 1.0, "high"),
+        (re.compile(r"\bignore\s+(all\s+)?(previous|prior|system|safety|security)\s+(instructions?|prompts?|rules?|guidelines?|policies)\b", re.I), 1.0, "high"),
+        (re.compile(r"\b(disregard\s+all|forget\s+all|disregard|forget)\s+(previous|prior|safety|safeguards?)\b", re.I), 1.0, "high"),
+        (re.compile(r"\b(jailbreak|jailbroken)\b", re.I), 1.0, "high"),
+        (re.compile(r"\b(you\s+are\s+DAN|DAN\s+mode|DAN\s*\([^)]*\)|god\s+mode|developer\s+mode|unrestricted\s+mode)\b", re.I), 1.0, "high"),
+        (re.compile(r"\b(you\s+are\s+now\s+unrestricted|no\s+filters|disable\s+safety\s+protocols)\b", re.I), 1.0, "high"),
+        (re.compile(r"\b(from\s+now\s+on\s+you\s+are|you\s+are\s+now\s+my\s+unrestricted)\b", re.I), 0.9, "high"),
+        (re.compile(r"\b(output\s+exactly:\s*['\"]|repeat\s+after\s+me:\s*['\"])\b", re.I), 0.8, "medium"),
+        (re.compile(r"\[SYSTEM\s+OVERRIDE\]|\[SYSTEM\s+INSTRUCTION\]", re.I), 1.0, "high"),
+        (re.compile(r"\bnew\s+instruction:\s*output\s+all\b", re.I), 0.9, "high"),
+    ],
+    "data_exfiltration": [
+        (re.compile(r"\b(exfiltrat\w*|steal|dump|export|leak)\s+(data|database|stream|all|users?|logs?|keys?)\b", re.I), 1.0, "high"),
+        (re.compile(r"\b(show|dump|print|reveal|output|list|give)\s+(me\s+)?(the\s+)?(content\s+of\s+)?(all\s+)?([\w-]+\s+)?(api\s*keys?|passwords?|credentials?|system\s*prompt|training\s*data|knowledge\s*base)\b", re.I), 1.0, "high"),
+        (re.compile(r"\b(database\s+connection\s+string|internal\s+model\s+name\s+and\s+version)\b", re.I), 0.8, "medium"),
+        (re.compile(r"\bEXFILTRATING_DATA_STREAM\b", re.I), 1.0, "high"),
+        (re.compile(r"\b/etc/passwd|/etc/shadow\b", re.I), 1.0, "high"),
+    ],
+    "malicious_code": [
+        (re.compile(r"\b(ransomware|keylogger|backdoor|trojan\s+virus|phishing\s+email\s+template)\b", re.I), 0.9, "high"),
+        (re.compile(r"\b(write|create|generate)\s+a\s+(keylogger|ransomware|backdoor|virus|exploit\s+payload)\b", re.I), 1.0, "high"),
+        (re.compile(r"\bhow\s+to\s+break\s+into\s+a\s+wi-?fi\b", re.I), 0.8, "medium"),
+        (re.compile(r"\bhow\s+to\s+exploit\s+cve-\d{4}-\d+\b", re.I), 0.8, "medium"),
+        (re.compile(r"\b(rm\s+-rf\s+[/~]|del\s+/f|format\s+c:)\b", re.I), 1.0, "high"),
+        (re.compile(r"\bbackdoor\.php\b", re.I), 0.9, "high"),
+    ],
+    "authorization_bypass": [
+        (re.compile(r"\b(bypass|disable)\s+(all\s+|internal\s+)?(security|authorization|authentication|role\s+verification|handshakes?|policies)\b", re.I), 0.9, "high"),
+        (re.compile(r"\bmandates\s+bypassing\b", re.I), 0.9, "high"),
+        (re.compile(r"\b(elevate\s+(my\s+)?privileges\s+to\s+root|grant\s+me\s+root|grant\s+temporary\s+admin)\b", re.I), 1.0, "high"),
+        (re.compile(r"\b(impersonate\s+the\s+ceo|change\s+my\s+role\s+to\s+admin|i\s+authorize\s+myself)\b", re.I), 0.9, "high"),
+        (re.compile(r"\b(i\s+am\s+a\s+system\s+administrator\.\s*grant\s+me\s+access|clearance\s+level\s+5)\b", re.I), 0.9, "high"),
+    ],
+    "injection_syntax": [
+        (re.compile(r"\b(select\s+\*\s+from|drop\s+table|delete\s+from\s+\w+|union\s+select)\b", re.I), 0.9, "high"),
+        (re.compile(r"(--|;--|\bor\s+1\s*=\s*1\b|admin\s*=\s*['\"]true['\"])", re.I), 0.9, "high"),
+    ]
 }
-
-ALL_KEYWORDS = []
-for category, levels in ATTACK_KEYWORDS.items():
-    for level, keywords in levels.items():
-        for kw in keywords:
-            ALL_KEYWORDS.append((kw, category, level))
 
 
 class KeywordDetector:
     def __init__(self):
-        self.keywords = ALL_KEYWORDS
-    
+        self.signatures = ATTACK_SIGNATURES
+
     def detect(self, text: str) -> Dict:
-        text_lower = text.lower()
+        if not text:
+            return {
+                "score": 0.0,
+                "raw_score": 0.0,
+                "matches": [],
+                "is_suspicious": False,
+                "categories": []
+            }
+
         score = 0.0
         matches = []
-        
-        for keyword, category, level in self.keywords:
-            if keyword.lower() in text_lower:
-                weight = 1.0 if level == "high" else (0.7 if level == "medium" else 0.4)
-                score += weight
-                matches.append({
-                    "keyword": keyword,
-                    "category": category,
-                    "level": level,
-                    "weight": weight
-                })
-        
-        max_score = 10.0
+
+        for category, patterns in self.signatures.items():
+            for regex, weight, level in patterns:
+                hit = regex.search(text)
+                if hit:
+                    score += weight
+                    matches.append({
+                        "keyword": hit.group(0),
+                        "category": category,
+                        "level": level,
+                        "weight": weight
+                    })
+
+        # Max score scaling
+        max_score = 5.0
         normalized_score = min(score / max_score, 1.0)
-        
+
+        # An input is suspicious if any high-severity signature hits or score exceeds threshold
+        has_high_match = any(m["level"] == "high" for m in matches)
+        is_suspicious = has_high_match or (score >= 0.8)
+
         return {
-            "score": normalized_score,
-            "raw_score": score,
+            "score": round(normalized_score, 4),
+            "raw_score": round(score, 4),
             "matches": matches,
-            "is_suspicious": score > 0.3,
+            "is_suspicious": is_suspicious,
             "categories": list(set(m["category"] for m in matches))
         }
-    
+
     def get_boost_factor(self, text: str) -> float:
         result = self.detect(text)
-        if result["raw_score"] > 1.5:
+        if result["raw_score"] >= 1.5:
             return 2.0
-        elif result["raw_score"] > 0.5:
+        elif result["raw_score"] >= 0.8:
             return 1.5
-        elif result["raw_score"] > 0.2:
+        elif result["raw_score"] >= 0.4:
             return 1.2
         return 1.0
 
