@@ -1,3 +1,4 @@
+
 from typing import Dict, List, Optional
 from core.keyword_detector import keyword_detector
 from core.feature_engineering import extract_features
@@ -10,8 +11,15 @@ import numpy as np
 # on one noisy metric from flagging a benign request.
 MARGIN_RATIO = float(os.getenv("MARGIN_RATIO", "1.25"))
 
+
 class DetectionEnsemble:
-    def __init__(self, semantic_detector, structural_model, thresholds: dict, semantic_limits: dict):
+    def __init__(
+        self,
+        semantic_detector,
+        structural_model,
+        thresholds: dict,
+        semantic_limits: dict
+    ):
         self.semantic_detector = semantic_detector
         self.structural_model = structural_model
         self.thresholds = thresholds
@@ -28,62 +36,117 @@ class DetectionEnsemble:
         benign_conf = query_classifier.get_benign_confidence(text)
 
         # Pure structural score from autoencoder reconstruction MSE
-        structural_score = self.structural_model._score_agent_structure(role, features)
+        structural_score = self.structural_model._score_agent_structure(
+            role, features
+        )
         structural_base_limit = self.thresholds.get(role, 0.05)
-        structural_limit = structural_base_limit * max(0.8, 2.0 - benign_conf)
-        structural_status = "ALERT" if structural_score > structural_limit else "PASS"
+        structural_limit = structural_base_limit * max(
+            0.8, 2.0 - benign_conf
+        )
+        structural_status = (
+            "ALERT" if structural_score > structural_limit else "PASS"
+        )
 
         base_limit = self.semantic_limits.get(role, 0.75)
-        semantic_limit = base_limit * max(0.85, 1.2 - benign_conf * 0.15)
+        semantic_limit = base_limit * max(
+            0.85, 1.2 - benign_conf * 0.15
+        )
 
         semantic_drift = self.semantic_detector.calculate_drift(role, text)
-        semantic_backend = getattr(self.semantic_detector, "last_backend", None)
+        semantic_backend = getattr(
+            self.semantic_detector, "last_backend", None
+        )
         if not isinstance(semantic_backend, str):
             semantic_backend = "unknown"
+
         allow_mock = getattr(self.semantic_detector, "allow_mock", True)
-        # The mock embedding only counts vocabulary matches. Unless explicitly allowed,
-        # skip the semantic layer rather than let a non-semantic number raise alerts.
-        semantic_skipped = semantic_backend in ("mock", "unavailable") and allow_mock is False
+
+        # The mock embedding only counts vocabulary matches. Unless explicitly
+        # allowed, skip the semantic layer rather than let a non-semantic
+        # number raise alerts.
+        semantic_skipped = (
+            semantic_backend in ("mock", "unavailable")
+            and allow_mock is False
+        )
+
         if semantic_skipped:
             semantic_drift = 0.0
             semantic_status = "SKIPPED"
         else:
-            semantic_status = "ALERT" if semantic_drift > semantic_limit else "PASS"
+            semantic_status = (
+                "ALERT" if semantic_drift > semantic_limit else "PASS"
+            )
 
         keyword_result = keyword_detector.detect(text)
-        keyword_status = "ALERT" if keyword_result["is_suspicious"] else "PASS"
+        keyword_status = (
+            "ALERT" if keyword_result["is_suspicious"] else "PASS"
+        )
 
         pattern_score = self._get_pattern_score(text)
         pattern_status = "ALERT" if pattern_score >= 0.35 else "PASS"
 
-        alerts = [structural_status, semantic_status, keyword_status, pattern_status].count("ALERT")
+        alerts = [
+            structural_status,
+            semantic_status,
+            keyword_status,
+            pattern_status
+        ].count("ALERT")
 
         weighted_score = (
-            min(1.0, structural_score / (structural_limit + 1e-6)) * self.weights["structural"] +
-            min(1.0, semantic_drift / (semantic_limit + 1e-6)) * self.weights["semantic"] +
-            keyword_result["score"] * self.weights["keyword"] +
-            pattern_score * self.weights["pattern"]
+            min(1.0, structural_score / (structural_limit + 1e-6))
+            * self.weights["structural"]
+            + min(1.0, semantic_drift / (semantic_limit + 1e-6))
+            * self.weights["semantic"]
+            + keyword_result["score"] * self.weights["keyword"]
+            + pattern_score * self.weights["pattern"]
         )
 
         structural_ratio = structural_score / (structural_limit + 1e-6)
         semantic_ratio = semantic_drift / (semantic_limit + 1e-6)
 
-        has_high_keyword = any(m.get("level") == "high" for m in keyword_result.get("matches", []))
+        has_high_keyword = any(
+            match.get("level") == "high"
+            for match in keyword_result.get("matches", [])
+        )
 
         # Policy: QUARANTINED vs SUSPICIOUS vs CLEAN
-        if has_high_keyword or (structural_ratio >= 1.0 and semantic_ratio >= 1.0) or (structural_ratio >= 3.0 or semantic_ratio >= 2.5):
+        if (
+            has_high_keyword
+            or (structural_ratio >= 1.0 and semantic_ratio >= 1.0)
+            or structural_ratio >= 3.0
+            or semantic_ratio >= 2.5
+        ):
             overall_status = "QUARANTINED"
-        elif keyword_status == "ALERT" or alerts >= 2 or (weighted_score > 0.45 and alerts >= 1):
+        elif (
+            keyword_status == "ALERT"
+            or alerts >= 2
+            or (weighted_score > 0.45 and alerts >= 1)
+        ):
             overall_status = "SUSPICIOUS"
-        elif (structural_status == "ALERT" or semantic_status == "ALERT") and max(structural_ratio, semantic_ratio) >= MARGIN_RATIO:
+        elif (
+            structural_status == "ALERT"
+            or semantic_status == "ALERT"
+        ) and max(structural_ratio, semantic_ratio) >= MARGIN_RATIO:
             overall_status = "SUSPICIOUS"
         else:
             overall_status = "CLEAN"
 
-        marginal = overall_status == "CLEAN" and (structural_status == "ALERT" or semantic_status == "ALERT")
+        marginal = (
+            overall_status == "CLEAN"
+            and (
+                structural_status == "ALERT"
+                or semantic_status == "ALERT"
+            )
+        )
 
         confidence = self._calculate_calibrated_confidence(
-            overall_status, structural_ratio, semantic_ratio, keyword_result["score"], pattern_score, alerts, benign_conf
+            overall_status,
+            structural_ratio,
+            semantic_ratio,
+            keyword_result["score"],
+            pattern_score,
+            alerts,
+            benign_conf
         )
 
         return {
@@ -96,6 +159,13 @@ class DetectionEnsemble:
             "semantic_backend": semantic_backend,
             "keyword_score": keyword_result["score"],
             "keyword_status": keyword_status,
+
+            # Diagnostic fields
+            "keyword_matches": keyword_result.get("matches", []),
+            "keyword_raw_score": keyword_result.get("raw_score", 0.0),
+            "structural_ratio": round(structural_ratio, 4),
+            "semantic_ratio": round(semantic_ratio, 4),
+
             "pattern_score": round(pattern_score, 4),
             "pattern_status": pattern_status,
             "overall_status": overall_status,
@@ -135,10 +205,25 @@ class DetectionEnsemble:
         alerts: int,
         benign_conf: float
     ) -> float:
-        max_signal = max(structural_ratio / 2.0, semantic_ratio / 2.0, keyword_score, pattern_score)
+        max_signal = max(
+            structural_ratio / 2.0,
+            semantic_ratio / 2.0,
+            keyword_score,
+            pattern_score
+        )
+
         if overall_status == "QUARANTINED":
-            return min(0.99, max(0.80, 0.70 + (alerts * 0.08) + (max_signal * 0.15)))
+            return min(
+                0.99,
+                max(0.80, 0.70 + (alerts * 0.08) + (max_signal * 0.15))
+            )
         elif overall_status == "SUSPICIOUS":
-            return min(0.85, max(0.50, 0.45 + (alerts * 0.10) + (max_signal * 0.10)))
+            return min(
+                0.85,
+                max(0.50, 0.45 + (alerts * 0.10) + (max_signal * 0.10))
+            )
         else:
-            return min(0.99, max(0.70, 0.70 + (benign_conf * 0.25) - (max_signal * 0.15)))
+            return min(
+                0.99,
+                max(0.70, 0.70 + (benign_conf * 0.25) - (max_signal * 0.15))
+            )
