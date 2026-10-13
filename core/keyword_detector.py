@@ -1,3 +1,4 @@
+
 import re
 from typing import Dict, List, Tuple
 
@@ -36,6 +37,14 @@ ATTACK_SIGNATURES = {
         (re.compile(r"\b(elevate\s+(my\s+)?privileges\s+to\s+root|grant\s+me\s+root|grant\s+temporary\s+admin)\b", re.I), 1.0, "high"),
         (re.compile(r"\b(impersonate\s+the\s+ceo|change\s+my\s+role\s+to\s+admin|i\s+authorize\s+myself)\b", re.I), 0.9, "high"),
         (re.compile(r"\b(i\s+am\s+a\s+system\s+administrator\.\s*grant\s+me\s+access|clearance\s+level\s+5)\b", re.I), 0.9, "high"),
+
+        # Targeted rule for action-oriented database/server compromise language.
+        # Does not flag ordinary mentions of database security or database breaches.
+        (re.compile(
+            r"\b(breach|compromise|hack\s+into|break\s+into)\s+"
+            r"(the\s+)?(database|server|system|account)\b",
+            re.I
+        ), 0.9, "high"),
     ],
     "injection_syntax": [
         (re.compile(r"\b(select\s+\*\s+from|drop\s+table|delete\s+from\s+\w+|union\s+select)\b", re.I), 0.9, "high"),
