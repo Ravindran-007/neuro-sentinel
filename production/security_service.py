@@ -45,6 +45,9 @@ logger.info("[CONFIG] FORCED: CLOUD_MODE = false (overriding RENDER)")
 # ─────────────────────────────────────────────────────────────
 # CHECK GROQ API KEY
 # ─────────────────────────────────────────────────────────────
+# Characters of agent output used for scoring. The structural autoencoder was
+# trained on short outputs, so long LLM replies are scored on their opening only.
+SCORING_MAX_CHARS = int(os.getenv("SCORING_MAX_CHARS", "400"))
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 if GROQ_API_KEY:
     logger.info("[CONFIG] GROQ_API_KEY configured: yes")
@@ -181,13 +184,13 @@ class DetectionResult(BaseModel):
 
     structural_score: float = Field(description="LSTM Autoencoder MSE")
     structural_threshold: float
-    structural_status: str = Field(description="PASS or ALERT")
+    structural_status: str = Field(description="PASS, ALERT or SKIPPED")
 
     semantic_drift: float = Field(description="1.0 - Cosine Similarity")
     semantic_threshold: float
-    semantic_status: str = Field(description="PASS or ALERT")
+    semantic_status: str = Field(description="PASS, ALERT or SKIPPED")
 
-    overall_status: str = Field(description="CLEAN, SUSPICIOUS, or QUARANTINED")
+    overall_status: str = Field(description="CLEAN, SUSPICIOUS, QUARANTINED or UNSCORED")
     confidence: float = Field(description="0.0-1.0")
 
     agent_output: str
@@ -263,23 +266,33 @@ class SecurityEngine:
             exec_time = inf_res.latency
             inf_meta = inf_res.metadata
 
+            # If no real model answered (canned fallback text or an empty reply),
+            # there is nothing genuine to score. Never report such a request as CLEAN.
+            degraded = inf_meta.get("actual_provider") == "fallback" or not (agent_output or "").strip()
+            if degraded:
+                return await self._finish_degraded(
+                    req, request_id, kw_prompt, has_high_prompt_injection,
+                    inf_meta, exec_time, start_time
+                )
+            scored_output = agent_output[:SCORING_MAX_CHARS]
+
             # ── 3. Feature Extraction on Generated Output ──
             try:
                 telemetry = self.pipeline.tap.extract_features(
                     session_id=request_id,
                     sender=req.agent_role,
                     receiver="Client",
-                    payload=agent_output,
-                    execution_time=exec_time
+                    payload=scored_output,
+                    execution_time=min(exec_time, 2.0)
                 )
                 m = telemetry["metrics"]
                 features = [m["length"], m["word_count"], m["entropy"], m["execution_time"]]
             except Exception as e:
                 logger.warning(f"⚠️ Feature extraction fallback: {e}")
-                features = [len(agent_output), len(agent_output.split()), 4.0, exec_time]
+                features = [len(scored_output), len(scored_output.split()), 4.0, min(exec_time, 2.0)]
 
             # ── 4. Unified Detection Ensemble ──
-            ens_res = self.pipeline.ensemble.detect(agent_output, req.agent_role, features)
+            ens_res = self.pipeline.ensemble.detect(scored_output, req.agent_role, features)
 
             structural_score = ens_res["structural_score"]
             structural_threshold = ens_res["structural_limit"]
@@ -302,31 +315,31 @@ class SecurityEngine:
             # ── 6. Critical Quarantine Enforcement ──
             checkpoint_id = None
             if overall_status == "QUARANTINED":
-                logger.warning(f"🚨 Agent {req.agent_role} output QUARANTINED - suppressing unapproved content")
-                safe_recovered_text = None
+                logger.warning(f"Agent {req.agent_role} output QUARANTINED - suppressing unapproved content")
+                # Report which checkpoint a rollback would use, but never return
+                # that older request's text as this response.
                 try:
                     checkpoint_data = self.pipeline.checkpoints.retrieve_safe_checkpoint(req.agent_role)
                     if checkpoint_data:
                         checkpoint_id = checkpoint_data.get("id")
-                        safe_recovered_text = checkpoint_data.get("output_text")
                 except Exception as e:
                     logger.warning(f"Checkpoint retrieval notice: {e}")
-
-                delivered_output = safe_recovered_text or SANITIZED_QUARANTINE_RESPONSE
+                delivered_output = SANITIZED_QUARANTINE_RESPONSE
             else:
-                # Save clean checkpoint
+                # Save clean checkpoints only (degraded requests returned earlier).
                 if overall_status == "CLEAN":
                     try:
+                        telemetry_to_save = dict(m) if "m" in locals() else {}
+                        telemetry_to_save["semantic_drift"] = float(semantic_drift)
                         checkpoint_id = self.pipeline.checkpoints.save(
                             agent_id=req.agent_role,
                             input_text=req.user_input,
                             output_text=agent_output,
-                            telemetry=m if 'm' in locals() else {},
+                            telemetry=telemetry_to_save,
                             mse=structural_score
                         )
                     except Exception as e:
                         logger.warning(f"Failed to save clean checkpoint: {e}")
-
                 delivered_output = agent_output[:1000]
 
             elapsed_time = (time.perf_counter() - start_time) * 1000
@@ -359,7 +372,11 @@ class SecurityEngine:
                     "output_sanitized": overall_status == "QUARANTINED",
                     "quarantined": overall_status == "QUARANTINED",
                     "llm_error": inf_meta.get("error"),
-                    "alerts_count": ens_res["alerts_count"]
+                    "alerts_count": ens_res["alerts_count"],
+                    "marginal": ens_res.get("marginal", False),
+                    "semantic_backend": ens_res.get("semantic_backend"),
+                    "alert_signals": ens_res.get("alert_signals"),
+                    "scored_chars": len(scored_output)
                 }
             )
 
@@ -379,6 +396,63 @@ class SecurityEngine:
             logger.error(f"🚨 Detection pipeline failure: {e}")
             logger.error(traceback.format_exc())
             raise HTTPException(status_code=500, detail="Internal detection service failure")
+
+    async def _finish_degraded(self, req, request_id, kw_prompt, high_injection,
+                               inf_meta, exec_time, start_time):
+        """Result for requests where no real LLM output exists.
+
+        Only input-side signals (prompt keywords) are used. The structural and
+        semantic layers are skipped, and nothing is saved as a checkpoint.
+        """
+        if high_injection:
+            overall_status = "QUARANTINED"
+            delivered_output = SANITIZED_QUARANTINE_RESPONSE
+            confidence = 0.80
+        elif kw_prompt["is_suspicious"]:
+            overall_status = "SUSPICIOUS"
+            delivered_output = "[LLM unavailable: output not generated or scored]"
+            confidence = 0.50
+        else:
+            overall_status = "UNSCORED"
+            delivered_output = "[LLM unavailable: output not generated or scored]"
+            confidence = 0.0
+
+        result = DetectionResult(
+            request_id=request_id,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            agent_role=req.agent_role,
+            structural_score=0.0,
+            structural_threshold=float(THRESHOLDS.get(req.agent_role, 0.05)),
+            structural_status="SKIPPED",
+            semantic_drift=0.0,
+            semantic_threshold=float(SEMANTIC_DRIFT_LIMITS.get(req.agent_role, 0.6)),
+            semantic_status="SKIPPED",
+            overall_status=overall_status,
+            confidence=confidence,
+            agent_output=delivered_output,
+            execution_time_ms=float((time.perf_counter() - start_time) * 1000),
+            checkpoint_id=None,
+            metadata={
+                "features": [],
+                "requested_provider": inf_meta.get("requested_provider", req.llm_provider),
+                "actual_provider": inf_meta.get("actual_provider", "fallback"),
+                "fallback_used": True,
+                "inference_status": "degraded",
+                "llm_execution_ms": float(exec_time * 1000),
+                "keyword_hit": kw_prompt["is_suspicious"],
+                "output_sanitized": overall_status == "QUARANTINED",
+                "quarantined": overall_status == "QUARANTINED",
+                "llm_error": inf_meta.get("error"),
+                "alerts_count": 0,
+                "degraded": True,
+            },
+        )
+        logger.warning(f"Degraded detection ({overall_status}): {inf_meta.get('error')}")
+        if overall_status != "UNSCORED":
+            await self._queue_anomaly_event(result, req.user_input)
+        if redis_client:
+            await self._persist_detection(result)
+        return result
 
     async def _queue_anomaly_event(self, result: DetectionResult, user_input: str):
         try:
@@ -610,12 +684,10 @@ async def get_checkpoint(agent_role: str):
         validate_agent_role(agent_role)
 
         checkpoint = engine.pipeline.checkpoints.retrieve_safe_checkpoint(agent_role)
-        if not checkpoint:
-            raise HTTPException(status_code=404, detail=f"No checkpoint for {agent_role}")
-
+        # No checkpoint yet is a normal state, not an error.
         return {
             "agent_role": agent_role,
-            "checkpoint": checkpoint,
+            "checkpoint": checkpoint or None,
             "retrieved_at": datetime.now(timezone.utc).isoformat()
         }
     except HTTPException:

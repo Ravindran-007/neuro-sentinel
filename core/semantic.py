@@ -219,8 +219,17 @@ class SemanticDriftDetector:
         
         self.hf_api_key = os.getenv("HF_API_KEY", "")
         self.hf_model = "sentence-transformers/all-MiniLM-L6-v2"
-        self.hf_url = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{self.hf_model}"
+        # Override with HF_EMBEDDING_URL if Hugging Face changes its inference endpoint.
+        self.hf_url = os.getenv("HF_EMBEDDING_URL", "").strip() or (
+            f"https://api-inference.huggingface.co/pipeline/feature-extraction/{self.hf_model}")
         self._use_hf = bool(self.hf_api_key)
+
+        # The mock embedding only counts vocabulary matches; it is not semantic.
+        # By default the semantic layer is SKIPPED when only the mock is available.
+        self.allow_mock = os.getenv("SEMANTIC_ALLOW_MOCK", "false").strip().lower() == "true"
+        self.anchor_texts = {}
+        self.anchors_by_backend = {}   # {role: {"hf": vec, "mock": vec}}
+        self.last_backend = None       # "hf", "mock" or "unavailable" for the last drift call
 
     def _get_embedding_hf(self, text: str) -> np.ndarray:
         try:
@@ -274,24 +283,52 @@ class SemanticDriftDetector:
             return vec / norm
         return vec
 
-    def _get_embedding(self, text: str, role: str = None) -> np.ndarray:
+    def _embed(self, text: str, role: str = None):
+        """Return (vector, backend). Backend is 'hf' or 'mock'."""
         if self._use_hf:
             emb = self._get_embedding_hf(text)
             if emb is not None:
-                return emb
-        
-        return self._get_embedding_mock(text, role)
+                return emb, "hf"
+        return self._get_embedding_mock(text, role), "mock"
+
+    def _get_embedding(self, text: str, role: str = None) -> np.ndarray:
+        return self._embed(text, role)[0]
 
     def register_anchor(self, role: str, system_prompt: str):
-        vec = self._get_embedding(system_prompt, role)
-        self.anchors[role] = vec
+        """Embed the anchor once per available backend so that an output is only
+        ever compared with an anchor from the SAME embedding space."""
+        self.anchor_texts[role] = system_prompt
+        per_backend = {"mock": self._get_embedding_mock(system_prompt, role)}
+        if self._use_hf:
+            hf_vec = self._get_embedding_hf(system_prompt)
+            if hf_vec is not None:
+                per_backend["hf"] = hf_vec
+        self.anchors_by_backend[role] = per_backend
+        # Kept for backward compatibility with older code and tests.
+        self.anchors[role] = per_backend.get("hf", per_backend["mock"])
+
+    def _anchor_for(self, role: str, backend: str):
+        per_backend = self.anchors_by_backend.get(role, {})
+        if backend in per_backend:
+            return per_backend[backend]
+        if backend == "hf" and role in self.anchor_texts:
+            # HF was unavailable at startup but works now: embed the anchor lazily.
+            vec = self._get_embedding_hf(self.anchor_texts[role])
+            if vec is not None:
+                per_backend["hf"] = vec
+                self.anchors_by_backend[role] = per_backend
+                return vec
+        return None
 
     def calculate_drift(self, role: str, output_text: str) -> float:
-        anchor_vec = self.anchors.get(role)
+        output_vec, backend = self._embed(output_text, role)
+        anchor_vec = self._anchor_for(role, backend)
         if anchor_vec is None:
+            # Cannot compare in a consistent space: report it instead of guessing.
+            self.last_backend = "unavailable"
             return 0.0
+        self.last_backend = backend
 
-        output_vec = self._get_embedding(output_text, role)
         if output_vec is None or np.all(output_vec == 0):
             return 0.0
 

@@ -38,7 +38,12 @@ def test_detect_valid_clean_input():
         "llm_provider": "ollama"
     }
     
-    response = client.post("/api/detect", json=request)
+    from core.engine import InferenceOutput
+    fake = InferenceOutput("The document reports three main findings about system reliability.", 0.4, {
+        "requested_provider": "ollama", "actual_provider": "ollama",
+        "fallback_used": False, "inference_status": "success", "error": None})
+    with patch("core.engine.IndustrialPipeline._execute_inference", return_value=fake):
+        response = client.post("/api/detect", json=request)
     
     if response.status_code == 200:
         data = response.json()

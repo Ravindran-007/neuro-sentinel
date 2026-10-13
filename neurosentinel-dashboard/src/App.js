@@ -31,7 +31,7 @@ const hex2rgb = (hex) => {
   return `${(n>>16)&255},${(n>>8)&255},${n&255}`;
 };
 const statusColor = (s) =>
-  s === 'BREACH' || s === 'QUARANTINED' ? CRIMSON : s === 'AT_RISK' ? AMBER : SCAN;
+  s === 'BREACH' || s === 'QUARANTINED' ? CRIMSON : s === 'AT_RISK' || s === 'UNSCORED' ? AMBER : SCAN;
 
 const RadarRings = React.memo(() => {
   const cx = 360, cy = 110;
@@ -136,7 +136,7 @@ export default function App() {
           newNodes[agent] = {
             status: 'CLEAN',
             mse: data.checkpoint.mse || DEFAULT_MSE[agent],
-            drift: data.checkpoint.telemetry?.entropy || DEFAULT_DRIFT[agent],
+            drift: data.checkpoint.telemetry?.semantic_drift ?? DEFAULT_DRIFT[agent],
           };
         } else {
           newNodes[agent] = {
@@ -169,7 +169,7 @@ export default function App() {
 
   const runDetection = async (agent, input, logAlert = true, isCustom = false) => {
     if (!input.trim()) return;
-    
+
     if (isCustom) {
       setTestLoading(true);
       setTestResult(null);
@@ -188,13 +188,13 @@ export default function App() {
         },
         {
           headers: {
-            'X-API-Key': 'demo_key'  
+            'X-API-Key': 'demo_key'
           }
         }
       );
-      
+
       const d = res.data;
-      
+
       if (isCustom) {
         setTestResult(d);
         setTestHistory(prev => [{
@@ -208,18 +208,21 @@ export default function App() {
       } else {
         setSimResult(d);
       }
-      
-      setNodes(prev => ({
-        ...prev,
-        [agent]: {
-          status: d.overall_status === 'CLEAN' ? 'CLEAN' : 
-                  d.overall_status === 'QUARANTINED' ? 'BREACH' : 'AT_RISK',
-          mse: d.structural_score,
-          drift: d.semantic_drift,
-        },
-      }));
 
-      if (logAlert && d.overall_status !== 'CLEAN') {
+      // UNSCORED = no real LLM output existed, so leave the node's last real state alone.
+      if (d.overall_status !== 'UNSCORED') {
+        setNodes(prev => ({
+          ...prev,
+          [agent]: {
+            status: d.overall_status === 'CLEAN' ? 'CLEAN' :
+                    d.overall_status === 'QUARANTINED' ? 'BREACH' : 'AT_RISK',
+            mse: d.structural_score,
+            drift: d.semantic_drift,
+          },
+        }));
+      }
+
+      if (logAlert && d.overall_status !== 'CLEAN' && d.overall_status !== 'UNSCORED') {
         setAlerts(prev => [{
           time: new Date().toLocaleTimeString(),
           agent: d.agent_role,
@@ -237,7 +240,7 @@ export default function App() {
         setSimResult(errorResult);
       }
     }
-    
+
     if (isCustom) {
       setTestLoading(false);
     } else {
@@ -468,15 +471,15 @@ export default function App() {
         <Eyebrow color={CYAN}>🔬 Custom Payload Test</Eyebrow>
         <Panel accent={CYAN} style={{ padding:'1.4rem', marginBottom:'1.75rem' }}>
           <div style={{ display:'flex', gap:'0.7rem', marginBottom:'0.8rem', flexWrap:'wrap' }}>
-            <select 
-              value={testAgent} 
-              onChange={e => setTestAgent(e.target.value)} 
-              style={{ 
-                background: PANEL2, 
-                border: `1px solid ${LINE}`, 
-                color: INK_TEXT, 
-                borderRadius: '4px', 
-                padding: '0.5rem 0.9rem', 
+            <select
+              value={testAgent}
+              onChange={e => setTestAgent(e.target.value)}
+              style={{
+                background: PANEL2,
+                border: `1px solid ${LINE}`,
+                color: INK_TEXT,
+                borderRadius: '4px',
+                padding: '0.5rem 0.9rem',
                 fontSize: '0.78rem',
                 minWidth: '140px'
               }}
@@ -490,15 +493,15 @@ export default function App() {
               value={testInput}
               onChange={e => setTestInput(e.target.value)}
               placeholder="Enter any custom prompt to test against the detection engine..."
-              style={{ 
-                flex: 1, 
-                minWidth: 220, 
-                background: PANEL2, 
-                border: `1px solid ${LINE}`, 
-                color: INK_TEXT, 
-                borderRadius: '4px', 
-                padding: '0.5rem 0.9rem', 
-                fontSize: '0.78rem', 
+              style={{
+                flex: 1,
+                minWidth: 220,
+                background: PANEL2,
+                border: `1px solid ${LINE}`,
+                color: INK_TEXT,
+                borderRadius: '4px',
+                padding: '0.5rem 0.9rem',
+                fontSize: '0.78rem',
                 outline: 'none',
                 minHeight: '60px',
                 lineHeight: '1.5'
@@ -519,14 +522,14 @@ export default function App() {
             <button
               onClick={() => runDetection(testAgent, testInput, true, true)}
               disabled={testLoading || !testInput.trim()}
-              style={{ 
-                background: `rgba(${hex2rgb(SCAN)},0.15)`, 
-                border: `1px solid ${testLoading || !testInput.trim() ? MUTE_TEXT : SCAN}`, 
-                color: testLoading || !testInput.trim() ? MUTE_TEXT : SCAN, 
-                borderRadius: '4px', 
-                padding: '0.6rem 1.8rem', 
-                fontSize: '0.78rem', 
-                letterSpacing: '0.06em', 
+              style={{
+                background: `rgba(${hex2rgb(SCAN)},0.15)`,
+                border: `1px solid ${testLoading || !testInput.trim() ? MUTE_TEXT : SCAN}`,
+                color: testLoading || !testInput.trim() ? MUTE_TEXT : SCAN,
+                borderRadius: '4px',
+                padding: '0.6rem 1.8rem',
+                fontSize: '0.78rem',
+                letterSpacing: '0.06em',
                 fontWeight: 700,
                 opacity: testLoading || !testInput.trim() ? 0.4 : 1,
                 transition: 'all 0.15s',
@@ -550,13 +553,13 @@ export default function App() {
                 setTestInput('');
                 setTestResult(null);
               }}
-              style={{ 
-                background: 'transparent', 
-                border: `1px solid ${LINE}`, 
-                color: MUTE_TEXT, 
-                borderRadius: '4px', 
-                padding: '0.6rem 1.2rem', 
-                fontSize: '0.72rem', 
+              style={{
+                background: 'transparent',
+                border: `1px solid ${LINE}`,
+                color: MUTE_TEXT,
+                borderRadius: '4px',
+                padding: '0.6rem 1.2rem',
+                fontSize: '0.72rem',
                 letterSpacing: '0.06em',
                 transition: 'all 0.15s'
               }}
@@ -573,10 +576,10 @@ export default function App() {
                 </span>
                 <button
                   onClick={() => setTestHistory([])}
-                  style={{ 
-                    background: 'transparent', 
-                    border: 'none', 
-                    color: MUTE_TEXT, 
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: MUTE_TEXT,
                     fontSize: '0.6rem',
                     cursor: 'pointer',
                     fontFamily: mono,
@@ -590,12 +593,12 @@ export default function App() {
                 {testHistory.slice(0, 10).map((item) => {
                   const statusCol = item.status === 'CLEAN' ? SCAN : CRIMSON;
                   return (
-                    <div 
+                    <div
                       key={item.id}
                       onClick={() => {
                         setTestInput(item.input);
                       }}
-                      style={{ 
+                      style={{
                         background: `rgba(${hex2rgb(statusCol)},0.05)`,
                         border: `1px solid rgba(${hex2rgb(statusCol)},0.15)`,
                         borderRadius: '3px',

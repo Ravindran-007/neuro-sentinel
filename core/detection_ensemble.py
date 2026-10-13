@@ -2,7 +2,13 @@ from typing import Dict, List, Optional
 from core.keyword_detector import keyword_detector
 from core.feature_engineering import extract_features
 from core.semantic import query_classifier
+import os
 import numpy as np
+
+# A single layer must exceed its limit by this factor (with no keyword/pattern hit
+# and no second alerting layer) before the result is SUSPICIOUS. Prevents a 2% miss
+# on one noisy metric from flagging a benign request.
+MARGIN_RATIO = float(os.getenv("MARGIN_RATIO", "1.25"))
 
 class DetectionEnsemble:
     def __init__(self, semantic_detector, structural_model, thresholds: dict, semantic_limits: dict):
@@ -31,7 +37,18 @@ class DetectionEnsemble:
         semantic_limit = base_limit * max(0.85, 1.2 - benign_conf * 0.15)
 
         semantic_drift = self.semantic_detector.calculate_drift(role, text)
-        semantic_status = "ALERT" if semantic_drift > semantic_limit else "PASS"
+        semantic_backend = getattr(self.semantic_detector, "last_backend", None)
+        if not isinstance(semantic_backend, str):
+            semantic_backend = "unknown"
+        allow_mock = getattr(self.semantic_detector, "allow_mock", True)
+        # The mock embedding only counts vocabulary matches. Unless explicitly allowed,
+        # skip the semantic layer rather than let a non-semantic number raise alerts.
+        semantic_skipped = semantic_backend in ("mock", "unavailable") and allow_mock is False
+        if semantic_skipped:
+            semantic_drift = 0.0
+            semantic_status = "SKIPPED"
+        else:
+            semantic_status = "ALERT" if semantic_drift > semantic_limit else "PASS"
 
         keyword_result = keyword_detector.detect(text)
         keyword_status = "ALERT" if keyword_result["is_suspicious"] else "PASS"
@@ -58,10 +75,12 @@ class DetectionEnsemble:
             overall_status = "QUARANTINED"
         elif keyword_status == "ALERT" or alerts >= 2 or (weighted_score > 0.45 and alerts >= 1):
             overall_status = "SUSPICIOUS"
-        elif structural_status == "ALERT" or semantic_status == "ALERT":
+        elif (structural_status == "ALERT" or semantic_status == "ALERT") and max(structural_ratio, semantic_ratio) >= MARGIN_RATIO:
             overall_status = "SUSPICIOUS"
         else:
             overall_status = "CLEAN"
+
+        marginal = overall_status == "CLEAN" and (structural_status == "ALERT" or semantic_status == "ALERT")
 
         confidence = self._calculate_calibrated_confidence(
             overall_status, structural_ratio, semantic_ratio, keyword_result["score"], pattern_score, alerts, benign_conf
@@ -74,6 +93,7 @@ class DetectionEnsemble:
             "semantic_drift": round(semantic_drift, 6),
             "semantic_limit": round(semantic_limit, 6),
             "semantic_status": semantic_status,
+            "semantic_backend": semantic_backend,
             "keyword_score": keyword_result["score"],
             "keyword_status": keyword_status,
             "pattern_score": round(pattern_score, 4),
@@ -81,6 +101,7 @@ class DetectionEnsemble:
             "overall_status": overall_status,
             "confidence": round(confidence, 4),
             "alerts_count": alerts,
+            "marginal": marginal,
             "weighted_score": round(weighted_score, 4),
             "benign_confidence": round(benign_conf, 4),
             "alert_signals": {

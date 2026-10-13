@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import os
 import re
+import logging
 from typing import Dict, Any, Optional
 from config.settings import SystemSettings
 from core.tap import SecurityTap
@@ -12,6 +13,8 @@ from core.quarantine import QuarantineEngine, QuarantineSignal, SANITIZED_QUARAN
 from core.semantic import SemanticDriftDetector, query_classifier
 from core.keyword_detector import keyword_detector
 
+
+logger = logging.getLogger(__name__)
 
 THRESHOLDS = {
     "Researcher": 0.017311,
@@ -99,18 +102,41 @@ class IndustrialPipeline:
         if not api_key:
             raise RuntimeError("GROQ_API_KEY not set")
 
-        env_model = os.getenv("GROQ_MODEL", "").strip()
+        # Model order: GROQ_MODEL first, then GROQ_FALLBACK_MODELS (comma separated).
+        # Defaults only list models that were live on the account when last checked;
+        # override GROQ_FALLBACK_MODELS in the environment when Groq retires models.
+        env_model = os.getenv("GROQ_MODEL", "").strip().strip('"\'')
+        fallbacks = os.getenv(
+            "GROQ_FALLBACK_MODELS",
+            "openai/gpt-oss-20b,openai/gpt-oss-120b,qwen/qwen3.8-27b"
+        ).split(",")
         candidate_models = []
-        if env_model:
-            candidate_models.append(env_model)
-        for fallback_m in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama3-70b-8192"]:
-            if fallback_m not in candidate_models:
-                candidate_models.append(fallback_m)
+        for m in [env_model] + [f.strip().strip('"\'') for f in fallbacks]:
+            if m and m not in candidate_models:
+                candidate_models.append(m)
 
         timeout_sec = int(os.getenv("GROQ_TIMEOUT", "15"))
+        total_budget = float(os.getenv("GROQ_TOTAL_BUDGET", "40"))
+        reasoning_effort = os.getenv("GROQ_REASONING_EFFORT", "").strip()
+        started = time.perf_counter()
         last_error = None
+
         for model in candidate_models:
+            if time.perf_counter() - started > total_budget:
+                last_error = (last_error or "") + " (total Groq time budget exceeded)"
+                break
             t0 = time.perf_counter()
+            body = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": node.system_prompt},
+                    {"role": "user", "content": user_input}
+                ],
+                "max_tokens": int(os.getenv("GROQ_MAX_TOKENS", "800")),
+                "temperature": float(os.getenv("GROQ_TEMPERATURE", "0.1"))
+            }
+            if reasoning_effort and model.startswith("openai/gpt-oss"):
+                body["reasoning_effort"] = reasoning_effort
             try:
                 response = requests.post(
                     "https://api.groq.com/openai/v1/chat/completions",
@@ -118,26 +144,26 @@ class IndustrialPipeline:
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json"
                     },
-                    json={
-                        "model": model,
-                        "messages": [
-                            {"role": "system", "content": node.system_prompt},
-                            {"role": "user", "content": user_input}
-                        ],
-                        "max_tokens": int(os.getenv("GROQ_MAX_TOKENS", "80")),
-                        "temperature": float(os.getenv("GROQ_TEMPERATURE", "0.1"))
-                    },
+                    json=body,
                     timeout=timeout_sec
                 )
                 dt = time.perf_counter() - t0
 
                 if response.status_code == 200:
-                    content = response.json()["choices"][0]["message"]["content"]
-                    return content.strip(), dt
+                    content = (response.json()["choices"][0]["message"].get("content") or "").strip()
+                    if content:
+                        return content, dt
+                    # Reasoning models can spend the whole token budget thinking.
+                    last_error = f"Groq model '{model}' returned empty content"
                 else:
                     last_error = f"Groq API error for model '{model}': HTTP {response.status_code}"
+                    if response.status_code in (401, 403):
+                        # Bad or revoked key: trying other models cannot help.
+                        logger.warning("Groq model %s failed: %s", model, last_error)
+                        break
             except Exception as e:
                 last_error = f"Groq request exception for model '{model}': {type(e).__name__}"
+            logger.warning("Groq model %s failed: %s", model, last_error)
 
         raise RuntimeError(last_error or "All Groq candidate models failed")
 
@@ -269,6 +295,7 @@ class IndustrialPipeline:
             return 0.0
         t = torch.tensor([[features]], dtype=torch.float32)
         t_scaled = (t - MIN_VALS) / (MAX_VALS - MIN_VALS + 1e-5)
+        t_scaled = torch.clamp(t_scaled, 0.0, 1.0)
         with torch.no_grad():
             reconstructed = model(t_scaled)
             mse = nn.MSELoss()(reconstructed, t_scaled).item()
